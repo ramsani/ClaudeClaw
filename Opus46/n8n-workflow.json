@@ -8,13 +8,14 @@
       },
       "type": "n8n-nodes-base.telegramTrigger",
       "typeVersion": 1.1,
-      "position": [-700, 240],
-      "id": "tg-trigger",
+      "position": [-448, 112],
+      "id": "efae163e-838e-4252-80f0-fe56f99d7824",
       "name": "Telegram",
+      "webhookId": "b1ec3810-399b-4cae-b6b4-b369235c7999",
       "credentials": {
         "telegramApi": {
-          "id": "FLWYmYa5V4hWAURS",
-          "name": "RGSI"
+          "id": "KZgyQyTC9wV8z07R",
+          "name": "ClaudeClaw"
         }
       }
     },
@@ -24,11 +25,22 @@
           "values": [
             {
               "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
                 "conditions": [
                   {
+                    "id": "cond-text",
                     "leftValue": "={{ $json.message.text }}",
                     "rightValue": "",
-                    "operator": { "type": "string", "operation": "exists", "singleValue": true }
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
                   }
                 ],
                 "combinator": "and"
@@ -36,11 +48,22 @@
             },
             {
               "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
                 "conditions": [
                   {
+                    "id": "cond-voice",
                     "leftValue": "={{ $json.message.voice.file_id }}",
                     "rightValue": "",
-                    "operator": { "type": "string", "operation": "exists", "singleValue": true }
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
                   }
                 ],
                 "combinator": "and"
@@ -48,12 +71,14 @@
             }
           ]
         },
-        "options": { "fallbackOutput": "extra" }
+        "options": {
+          "fallbackOutput": "extra"
+        }
       },
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.2,
-      "position": [-480, 240],
-      "id": "switch",
+      "position": [-224, 112],
+      "id": "b2f87fc8-0398-4d01-a516-af4341f24288",
       "name": "Switch texto / voz"
     },
     {
@@ -64,11 +89,12 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [-260, 140],
-      "id": "ack-texto",
+      "position": [0, 0],
+      "id": "cfc3e080-ef6b-4f39-a6bd-02d5d79c5f11",
       "name": "ACK texto",
+      "webhookId": "13e4eab6-2ab0-460a-8db2-9526cc698d97",
       "credentials": {
-        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
       }
     },
     {
@@ -85,8 +111,8 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-40, 140],
-      "id": "claude-texto",
+      "position": [224, 0],
+      "id": "94d1a364-cbc6-41af-9aaf-4ba2317f837f",
       "name": "Claude (texto)"
     },
     {
@@ -97,11 +123,12 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [-260, 340],
-      "id": "ack-voz",
+      "position": [0, 208],
+      "id": "d5b22a76-5ab6-4032-82bb-d8c335fd81d5",
       "name": "ACK voz",
+      "webhookId": "c188debd-7f5f-4f97-927c-e3c85120d0e2",
       "credentials": {
-        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
       }
     },
     {
@@ -112,11 +139,12 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [-40, 340],
-      "id": "get-audio",
+      "position": [224, 208],
+      "id": "d6ce67cc-f802-4b25-8235-cea9887dfc86",
       "name": "Bajar audio",
+      "webhookId": "fbc3334a-c038-4842-89a4-ac9f136540b1",
       "credentials": {
-        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
       }
     },
     {
@@ -127,8 +155,8 @@
       },
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 1,
-      "position": [180, 340],
-      "id": "whisper",
+      "position": [448, 208],
+      "id": "7bc44f5d-783c-492e-a772-988028edbe7c",
       "name": "Whisper",
       "credentials": {
         "openAiApi": { "id": "9VxiDLtrelh5azBD", "name": "RGSI" }
@@ -148,26 +176,24 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [400, 340],
-      "id": "claude-voz",
+      "position": [672, 208],
+      "id": "23144aad-49dc-4d73-8f92-9a43a5b5a3cc",
       "name": "Claude (voz)"
     },
     {
       "parameters": {
         "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
         "text": "={{ $json.result }}",
-        "additionalFields": {
-          "appendAttribution": false,
-          "replyToMessageId": "={{ $('Telegram').item.json.message.message_id }}"
-        }
+        "additionalFields": { "appendAttribution": false }
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [620, 140],
-      "id": "send-texto",
+      "position": [880, 0],
+      "id": "3e8866fe-595a-4146-b4e9-1996b276b31d",
       "name": "Respuesta texto",
+      "webhookId": "676f0d03-595f-4c46-8ef8-9036f6a2674b",
       "credentials": {
-        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
       }
     },
     {
@@ -176,17 +202,17 @@
         "text": "=🎤 _\"{{ $('Whisper').item.json.text }}\"_\n\n{{ $json.result }}",
         "additionalFields": {
           "appendAttribution": false,
-          "parse_mode": "Markdown",
-          "replyToMessageId": "={{ $('Telegram').item.json.message.message_id }}"
+          "parse_mode": "Markdown"
         }
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [620, 340],
-      "id": "send-voz",
+      "position": [880, 208],
+      "id": "f23bb65b-bb23-4c02-97e4-83f555416716",
       "name": "Respuesta voz",
+      "webhookId": "4bbbb0d6-8483-400d-845d-1453851422f5",
       "credentials": {
-        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
       }
     },
     {
@@ -197,14 +223,16 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [-260, 500],
-      "id": "unsupported",
+      "position": [0, 368],
+      "id": "4ad9aa7d-8e8b-47eb-9f61-87f66d526045",
       "name": "No soportado",
+      "webhookId": "28279bad-e66c-41e6-b736-b28b95530a6a",
       "credentials": {
-        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
       }
     }
   ],
+  "pinData": {},
   "connections": {
     "Telegram":           { "main": [[{ "node": "Switch texto / voz", "type": "main", "index": 0 }]] },
     "Switch texto / voz": {
@@ -214,14 +242,21 @@
         [{ "node": "No soportado", "type": "main", "index": 0 }]
       ]
     },
-    "ACK texto":   { "main": [[{ "node": "Claude (texto)", "type": "main", "index": 0 }]] },
-    "ACK voz":     { "main": [[{ "node": "Bajar audio",    "type": "main", "index": 0 }]] },
-    "Bajar audio": { "main": [[{ "node": "Whisper",        "type": "main", "index": 0 }]] },
-    "Whisper":     { "main": [[{ "node": "Claude (voz)",   "type": "main", "index": 0 }]] },
-    "Claude (texto)": { "main": [[{ "node": "Respuesta texto", "type": "main", "index": 0 }]] },
+    "ACK texto":      { "main": [[{ "node": "Claude (texto)", "type": "main", "index": 0 }]] },
+    "ACK voz":        { "main": [[{ "node": "Bajar audio",    "type": "main", "index": 0 }]] },
+    "Bajar audio":    { "main": [[{ "node": "Whisper",        "type": "main", "index": 0 }]] },
+    "Whisper":        { "main": [[{ "node": "Claude (voz)",   "type": "main", "index": 0 }]] },
+    "Claude (texto)": { "main": [[{ "node": "Respuesta texto","type": "main", "index": 0 }]] },
     "Claude (voz)":   { "main": [[{ "node": "Respuesta voz",  "type": "main", "index": 0 }]] }
   },
   "active": false,
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "meta": {
+    "instanceId": "0d66ba57838cf99df99a917c9a45d7db810aa7e80bea1d74469592e25dc06fa4"
+  },
   "tags": []
 }
