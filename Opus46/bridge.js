@@ -153,6 +153,8 @@ function askClaude(message, chatId) {
       message,
     ], { env: CLAUDE_ENV, cwd: WORK_DIR });
 
+    sendTelegramProgress(chatId, '⚡ Claude arrancó');
+
     let buffer = '', result = '', stderr = '';
     const seenTools = new Set();
 
