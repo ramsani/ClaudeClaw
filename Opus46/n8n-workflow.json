@@ -202,7 +202,7 @@
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            { "name": "file_id", "value": "={{ $('Telegram').item.json.message.photo[-1].file_id }}" },
+            { "name": "file_id", "value": "={{ $('Telegram').item.json.message.photo.slice(-1)[0].file_id }}" },
             { "name": "caption", "value": "={{ $('Telegram').item.json.message.caption ?? 'Analiza esta imagen.' }}" },
             { "name": "chat_id", "value": "={{ $('Telegram').item.json.message.chat.id }}" },
             { "name": "mime_type", "value": "image/jpeg" }
