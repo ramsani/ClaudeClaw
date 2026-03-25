@@ -11,7 +11,7 @@ const readline = require('readline');
 const TELEGRAM_BOT_TOKEN = '8507509309:AAGjHcxa4UNnPFxnvO0w5sliIXzU9Xonrjo';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 const ALLOWED_USER_ID = '6106631957';
-const OPENAI_API_KEY = 'YOUR_OPENAI_API_KEY';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TMUX_SESSION = 'claude-telegram';
 const OFFSET_FILE = path.join(__dirname, '.telegram-offset');
 const WEBHOOK_SECRET = 'test-secret';
@@ -715,7 +715,7 @@ function ensureClaudeSession() {
     }, 1000);
   } catch {
     console.log('Creating Claude tmux session...');
-    const cmd = `tmux new-session -d -s ${TMUX_SESSION} 'cd ${CLAUDE_FOLDER} && ANTHROPIC_AUTH_TOKEN="YOUR_API_KEY_HERE" ANTHROPIC_BASE_URL="https://api.minimax.io/anthropic" ANTHROPIC_MODEL="MiniMax-M2.7" claude --dangerously-skip-permissions; sleep infinity'`;
+    const cmd = `tmux new-session -d -s ${TMUX_SESSION} 'cd ${CLAUDE_FOLDER} && ANTHROPIC_AUTH_TOKEN="sk-cp-Iu7lGjFix4Vbw_LYGJCa1iF4UQeagsbqKgpgBDx_YehfUR2YERnRXuERJ55AUXN4WtXAoJOfE2BoABfjPJYdssgwWM236OOnrdozX1fL0N8NM_JliTnfG0o" ANTHROPIC_BASE_URL="https://api.minimax.io/anthropic" ANTHROPIC_MODEL="MiniMax-M2.7" claude --dangerously-skip-permissions; sleep infinity'`;
     execSync(cmd, { stdio: 'inherit' });
     console.log('Claude session created');
     setTimeout(() => {
@@ -759,6 +759,16 @@ function capturePane(start, end) {
   return tmux(command);
 }
 
+function getPanePos() {
+  try {
+    const out = tmux(`display-message -p -t ${TMUX_SESSION} '#{history_size} #{cursor_y}'`);
+    const [historySize, cursorY] = out.trim().split(/\s+/).map(Number);
+    return { historySize, cursorY };
+  } catch {
+    return { historySize: 0, cursorY: 0 };
+  }
+}
+
 function captureTail(lines = 12) {
   return capturePane(-Math.max(lines, 1));
 }
@@ -790,6 +800,66 @@ function hasIdlePromptAfterCommand(text, command) {
   return lines
     .slice(lastCommandIndex + 1)
     .some(line => isIdlePromptLine(line));
+}
+
+// Wait for a NEW prompt to appear after the beforePosition
+// Used for voice messages where we need to wait for Claude's response to OUR command
+function waitForNewPrompt(beforePosition, maxWait = 45000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    let lastPaneState = '';
+    let stableCount = 0;
+
+    const check = () => {
+      try {
+        const currentPos = getPanePos();
+        const afterPos = currentPos.historySize + currentPos.cursorY;
+
+        // If position has advanced past our before position, there's new content
+        if (afterPos > beforePosition) {
+          const pane = capturePane(100);
+          const parsed = parseOutput(pane, '');
+
+          // Check if we see a prompt that's NOT from before (look for fresh content)
+          const lines = pane.split('\n');
+          let foundNewPrompt = false;
+          for (let i = lines.length - 1; i >= 0; i--) {
+            if (isIdlePromptLine(lines[i])) {
+              // Found a prompt - is it after our before position?
+              if (i > 5) { // Not near the top, so it's a new prompt
+                foundNewPrompt = true;
+                break;
+              }
+            }
+          }
+
+          if (foundNewPrompt && parsed && parsed.trim()) {
+            if (parsed === lastPaneState) {
+              stableCount++;
+            } else {
+              lastPaneState = parsed;
+              stableCount = 1;
+            }
+
+            if (stableCount >= 2) {
+              resolve(parsed);
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        console.log('waitForNewPrompt check error:', err.message);
+      }
+
+      if (Date.now() - start > maxWait) {
+        reject(new Error('Timeout waiting for new prompt'));
+        return;
+      }
+      setTimeout(check, 300);
+    };
+
+    check();
+  });
 }
 
 function waitForPrompt(beforeTail, command, maxWait = 20000) {
@@ -1153,6 +1223,43 @@ function startWebhookServer() {
   });
 }
 
+// Direct API call to MiniMax (fast, no tmux)
+async function directClaudeRequest(message) {
+  const response = await fetch('https://api.minimax.io/anthropic/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.ANTHROPIC_AUTH_TOKEN || 'sk-cp-Iu7lGjFix4Vbw_LYGJCa1iF4UQeagsbqKgpgBDx_YehfUR2YERnRXuERJ55AUXN4WtXAoJOfE2BoABfjPJYdssgwWM236OOnrdozX1fL0N8NM_JliTnfG0o'}`,
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'MiniMax-M2.7',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: message }]
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  // Extract text from response (skip thinking blocks)
+  let text = '';
+  for (const block of data.content) {
+    if (block.type === 'text') {
+      text += block.text;
+    }
+  }
+
+  // Clean up LaTeX artifacts like \(...\) and \[
+  text = text.replace(/\\\((.*?)\\\)/g, '$1').replace(/\\\[(.*?)\\\]/g, '$1').replace(/\$(.*?)\$/g, '$1');
+
+  return text.trim();
+}
+
 // ============================================
 // VOICE MESSAGE HANDLER - USA OPENAI WHISPER SOLO PARA TRANSCRIPCIÓN
 // ============================================
@@ -1236,20 +1343,28 @@ async function handleVoiceMessage(fileId, chatId) {
       return '🎤 Audio recibido pero no pude transcribirlo.';
     }
 
-    // Enviar transcripción a Claude como mensaje
+    // Enviar transcripción a Claude usando sendToClaude() (misma lógica que texto)
     console.log('Voice: Transcripción:', transcription.substring(0, 50));
+
+    let claudeResponse = '';
     try {
-      await sendToClaude(transcription);
-      console.log('Voice: Enviado a Claude OK');
+      // sendToClaude() ya maneja: enviar comando, esperar prompt, capturar, parsear
+      claudeResponse = await sendToClaude(transcription);
+      console.log('Voice: Respuesta de Claude:', claudeResponse.substring(0, 50));
     } catch (err) {
       console.error('Voice: Error enviando a Claude:', err.message);
+      claudeResponse = 'Error obteniendo respuesta de Claude';
     }
 
     // Cleanup
     try { fs.unlinkSync(ogaPath); } catch {}
     try { fs.unlinkSync(mp3Path); } catch {}
 
-    return `🎤 Transcripción enviada a Claude: "${transcription.substring(0, 100)}${transcription.length > 100 ? '...' : ''}"`;
+    // Devolver la respuesta de Claude
+    if (claudeResponse && claudeResponse.trim()) {
+      return `🎤 "${transcription}"\n\n${claudeResponse}`;
+    }
+    return `🎤 Transcripción: "${transcription.substring(0, 100)}${transcription.length > 100 ? '...' : ''}"`;
 
   } catch (err) {
     console.error('Voice handle error:', err.message);
