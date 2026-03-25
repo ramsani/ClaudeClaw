@@ -117,6 +117,32 @@
     },
     {
       "parameters": {
+        "jsCode": "const MAX_LEN = 3600;\nconst raw = String($json.result ?? '').trim();\n\nfunction filterGarbage(text) {\n  return text\n    .replace(/[\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uf900-\\ufaff]/g, '')\n    .replace(/[\\u0400-\\u04ff\\u0500-\\u052f]/g, '')\n    .replace(/[\\u0600-\\u06ff\\u0750-\\u077f]/g, '')\n    .replace(/[\\uff00-\\uffef\\u3040-\\u30ff]/g, '')\n    .replace(/[^\\x00-\\x7F\\u00C0-\\u024F\\u00A0-\\u00FF\\n]/g, '')\n    .trim();\n}\n\nfunction cleanMarkdown(text) {\n  return String(text)\n    .replace(/```[\\s\\S]*?```/g, '')\n    .replace(/`([^`]+)`/g, '$1')\n    .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '$1')\n    .replace(/\\*\\*(.*?)\\*\\*/g, '$1')\n    .replace(/\\*(.*?)\\*/g, '$1')\n    .replace(/__(.*?)__/g, '$1')\n    .replace(/_(.*?)_/g, '$1')\n    .replace(/_/g, '')\n    .replace(/~~(.*?)~~/g, '$1')\n    .replace(/^[ \\t]*#{1,6}[ \\t]*/gm, '')\n    .replace(/^[ \\t]*>[ \\t]?/gm, '')\n    .replace(/^[ \\t]*[-*][ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*\\d+\\.[ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*([-*_]){3,}[ \\t]*$/gm, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\nfunction splitText(text, maxLen) {\n  if (!text) return ['(sin respuesta)'];\n  if (text.length <= maxLen) return [text];\n  const chunks = [];\n  let remaining = text;\n  while (remaining.length > maxLen) {\n    let cut = remaining.lastIndexOf('\\n\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf('\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) { cut = remaining.lastIndexOf('. ', maxLen); if (cut !== -1) cut += 1; }\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf(' ', maxLen);\n    if (cut < Math.floor(maxLen * 0.4)) cut = maxLen;\n    const part = remaining.slice(0, cut).trim();\n    if (part) chunks.push(part);\n    remaining = remaining.slice(cut).trim();\n  }\n  if (remaining) chunks.push(remaining);\n  return chunks.length ? chunks : ['(sin respuesta)'];\n}\n\nconst filtered = filterGarbage(raw);\nconst cleaned = cleanMarkdown(filtered);\nconst parts = splitText(cleaned, MAX_LEN);\n\nreturn parts.map((part, i) => ({\n  json: {\n    text: part,\n    fragmentIndex: i + 1,\n    fragmentTotal: parts.length\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [552, 0],
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Procesar texto"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [776, 0],
+      "id": "3e8866fe-595a-4146-b4e9-1996b276b31d",
+      "name": "Respuesta texto",
+      "webhookId": "676f0d03-595f-4c46-8ef8-9036f6a2674b",
+      "credentials": {
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
+      }
+    },
+    {
+      "parameters": {
         "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
         "text": "👨‍💻 trabajando...",
         "additionalFields": { "appendAttribution": false }
@@ -182,32 +208,23 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
-        "text": "={{ $json.result }}",
-        "additionalFields": { "appendAttribution": false }
+        "jsCode": "const MAX_LEN = 3600;\nconst raw = String($json.result ?? '').trim();\nconst whisperText = String($('Whisper').item.json.text ?? '').trim();\n\nfunction filterGarbage(text) {\n  return text\n    .replace(/[\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uf900-\\ufaff]/g, '')\n    .replace(/[\\u0400-\\u04ff\\u0500-\\u052f]/g, '')\n    .replace(/[\\u0600-\\u06ff\\u0750-\\u077f]/g, '')\n    .replace(/[\\uff00-\\uffef\\u3040-\\u30ff]/g, '')\n    .replace(/[^\\x00-\\x7F\\u00C0-\\u024F\\u00A0-\\u00FF\\n]/g, '')\n    .trim();\n}\n\nfunction cleanMarkdown(text) {\n  return String(text)\n    .replace(/```[\\s\\S]*?```/g, '')\n    .replace(/`([^`]+)`/g, '$1')\n    .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '$1')\n    .replace(/\\*\\*(.*?)\\*\\*/g, '$1')\n    .replace(/\\*(.*?)\\*/g, '$1')\n    .replace(/__(.*?)__/g, '$1')\n    .replace(/_(.*?)_/g, '$1')\n    .replace(/_/g, '')\n    .replace(/~~(.*?)~~/g, '$1')\n    .replace(/^[ \\t]*#{1,6}[ \\t]*/gm, '')\n    .replace(/^[ \\t]*>[ \\t]?/gm, '')\n    .replace(/^[ \\t]*[-*][ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*\\d+\\.[ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*([-*_]){3,}[ \\t]*$/gm, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\nfunction splitText(text, maxLen) {\n  if (!text) return ['(sin respuesta)'];\n  if (text.length <= maxLen) return [text];\n  const chunks = [];\n  let remaining = text;\n  while (remaining.length > maxLen) {\n    let cut = remaining.lastIndexOf('\\n\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf('\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) { cut = remaining.lastIndexOf('. ', maxLen); if (cut !== -1) cut += 1; }\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf(' ', maxLen);\n    if (cut < Math.floor(maxLen * 0.4)) cut = maxLen;\n    const part = remaining.slice(0, cut).trim();\n    if (part) chunks.push(part);\n    remaining = remaining.slice(cut).trim();\n  }\n  if (remaining) chunks.push(remaining);\n  return chunks.length ? chunks : ['(sin respuesta)'];\n}\n\nconst filtered = filterGarbage(raw);\nconst cleaned = cleanMarkdown(filtered);\nconst parts = splitText(cleaned, MAX_LEN);\n\nreturn parts.map((part, i) => ({\n  json: {\n    text: i === 0 ? `🎤 \"${whisperText}\"\\n\\n${part}` : part,\n    fragmentIndex: i + 1,\n    fragmentTotal: parts.length\n  }\n}));"
       },
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [880, 0],
-      "id": "3e8866fe-595a-4146-b4e9-1996b276b31d",
-      "name": "Respuesta texto",
-      "webhookId": "676f0d03-595f-4c46-8ef8-9036f6a2674b",
-      "credentials": {
-        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
-      }
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [896, 208],
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Procesar voz"
     },
     {
       "parameters": {
         "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
-        "text": "=🎤 _\"{{ $('Whisper').item.json.text }}\"_\n\n{{ $json.result }}",
-        "additionalFields": {
-          "appendAttribution": false,
-          "parse_mode": "Markdown"
-        }
+        "text": "={{ $json.text }}",
+        "additionalFields": { "appendAttribution": false }
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [880, 208],
+      "position": [1120, 208],
       "id": "f23bb65b-bb23-4c02-97e4-83f555416716",
       "name": "Respuesta voz",
       "webhookId": "4bbbb0d6-8483-400d-845d-1453851422f5",
@@ -242,12 +259,14 @@
         [{ "node": "No soportado", "type": "main", "index": 0 }]
       ]
     },
-    "ACK texto":      { "main": [[{ "node": "Claude (texto)", "type": "main", "index": 0 }]] },
-    "ACK voz":        { "main": [[{ "node": "Bajar audio",    "type": "main", "index": 0 }]] },
-    "Bajar audio":    { "main": [[{ "node": "Whisper",        "type": "main", "index": 0 }]] },
-    "Whisper":        { "main": [[{ "node": "Claude (voz)",   "type": "main", "index": 0 }]] },
-    "Claude (texto)": { "main": [[{ "node": "Respuesta texto","type": "main", "index": 0 }]] },
-    "Claude (voz)":   { "main": [[{ "node": "Respuesta voz",  "type": "main", "index": 0 }]] }
+    "ACK texto":       { "main": [[{ "node": "Claude (texto)",  "type": "main", "index": 0 }]] },
+    "ACK voz":         { "main": [[{ "node": "Bajar audio",     "type": "main", "index": 0 }]] },
+    "Bajar audio":     { "main": [[{ "node": "Whisper",         "type": "main", "index": 0 }]] },
+    "Whisper":         { "main": [[{ "node": "Claude (voz)",    "type": "main", "index": 0 }]] },
+    "Claude (texto)":  { "main": [[{ "node": "Procesar texto",  "type": "main", "index": 0 }]] },
+    "Claude (voz)":    { "main": [[{ "node": "Procesar voz",    "type": "main", "index": 0 }]] },
+    "Procesar texto":  { "main": [[{ "node": "Respuesta texto", "type": "main", "index": 0 }]] },
+    "Procesar voz":    { "main": [[{ "node": "Respuesta voz",   "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": {
