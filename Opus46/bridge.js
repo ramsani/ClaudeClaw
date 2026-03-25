@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * ClaudeClaw Bridge v4
+ * ClaudeClaw Bridge v5
  * Arquitectura: API local pura — n8n maneja Telegram, este bridge ejecuta Claude
  *
- * POST http://localhost:5679/execute  { "message": "texto" }
- *   → { "result": "respuesta de Claude o comando local" }
+ * POST http://localhost:5679/execute           { "message": "texto", "chat_id": "..." }
+ *   → { "result": "..." }
  *
- * POST http://localhost:5679/transcribe  (multipart: archivo de audio)
+ * POST http://localhost:5679/execute-with-file { "file_id": "...", "caption": "...", "chat_id": "...", "mime_type": "..." }
+ *   → { "result": "..." }
+ *
+ * POST http://localhost:5679/transcribe        (multipart: archivo de audio)
  *   → { "text": "transcripción" }
  *
  * GET  http://localhost:5679/health
@@ -14,7 +17,6 @@
  */
 'use strict';
 
-const https  = require('https');
 const http   = require('http');
 const { execSync, spawn } = require('child_process');
 const fs     = require('fs');
@@ -63,6 +65,7 @@ const LOCK_FILE = '/tmp/claudeclaw-bridge.lock';
 // CONFIG
 // ============================================================
 const OPENAI_KEY  = process.env.OPENAI_KEY;
+const TG_TOKEN    = process.env.TG_TOKEN;
 const MINIMAX_URL = process.env.ANTHROPIC_BASE_URL;
 const MINIMAX_KEY = process.env.ANTHROPIC_AUTH_TOKEN;
 const API_PORT    = parseInt(process.env.BRIDGE_PORT || '5679', 10);
@@ -73,50 +76,190 @@ if (!MINIMAX_KEY) {
   process.exit(1);
 }
 
-// ============================================================
-// CLAUDE -p CORE  (mismo entorno que alias `cm`)
-// ============================================================
-function askClaude(message) {
-  return new Promise((resolve, reject) => {
-    const env = {
-      ...process.env,
-      ANTHROPIC_BASE_URL:                       MINIMAX_URL,
-      ANTHROPIC_AUTH_TOKEN:                     MINIMAX_KEY,
-      ANTHROPIC_MODEL:                          'MiniMax-M2.7',
-      ANTHROPIC_SMALL_FAST_MODEL:               'MiniMax-M2.7',
-      ANTHROPIC_DEFAULT_SONNET_MODEL:           'MiniMax-M2.7',
-      ANTHROPIC_DEFAULT_OPUS_MODEL:             'MiniMax-M2.7',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL:            'MiniMax-M2.7',
-      API_TIMEOUT_MS:                           '3000000',
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-    };
+const CLAUDE_ENV = {
+  ...process.env,
+  ANTHROPIC_BASE_URL:                       MINIMAX_URL,
+  ANTHROPIC_AUTH_TOKEN:                     MINIMAX_KEY,
+  ANTHROPIC_MODEL:                          'MiniMax-M2.7',
+  ANTHROPIC_SMALL_FAST_MODEL:               'MiniMax-M2.7',
+  ANTHROPIC_DEFAULT_SONNET_MODEL:           'MiniMax-M2.7',
+  ANTHROPIC_DEFAULT_OPUS_MODEL:             'MiniMax-M2.7',
+  ANTHROPIC_DEFAULT_HAIKU_MODEL:            'MiniMax-M2.7',
+  API_TIMEOUT_MS:                           '3000000',
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+};
 
+// ============================================================
+// TELEGRAM PROGRESS (notificaciones intermedias)
+// ============================================================
+const TOOL_LABELS = {
+  Read:        (i) => `📂 Leyendo: ${path.basename(i.file_path || i.path || '')}`,
+  Write:       (i) => `📝 Escribiendo: ${path.basename(i.file_path || i.path || '')}`,
+  Edit:        (i) => `✏️ Editando: ${path.basename(i.file_path || i.path || '')}`,
+  MultiEdit:   (i) => `✏️ Editando: ${path.basename(i.file_path || i.path || '')}`,
+  Bash:        (i) => `⚡ ${String(i.command || i.cmd || '').slice(0, 80)}`,
+  Glob:        (i) => `🗂️ Buscando archivos: ${i.pattern || ''}`,
+  Grep:        (i) => `🔎 Buscando: ${String(i.pattern || '').slice(0, 60)}`,
+  WebSearch:   (i) => `🌐 Buscando: ${String(i.query || '').slice(0, 60)}`,
+  WebFetch:    (i) => `🌐 Descargando: ${String(i.url || '').slice(0, 60)}`,
+  TodoWrite:   ()  => `📋 Actualizando tareas`,
+  NotebookRead:(i) => `📓 Leyendo notebook: ${path.basename(i.notebook_path || '')}`,
+};
+
+async function sendTelegramProgress(chatId, text) {
+  if (!chatId || !TG_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, disable_notification: true }),
+    });
+  } catch {}
+}
+
+// ============================================================
+// PARSEAR STREAM-JSON Y EXTRAER TOOL CALLS
+// ============================================================
+function parseStreamJson(line, chatId, seenTools) {
+  try {
+    const event = JSON.parse(line);
+
+    // Tool calls en mensajes del asistente
+    if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
+      for (const block of event.message.content) {
+        if (block.type === 'tool_use' && !seenTools.has(block.id)) {
+          seenTools.add(block.id);
+          const fn = TOOL_LABELS[block.name];
+          const label = fn ? fn(block.input || {}) : `🔧 ${block.name}`;
+          sendTelegramProgress(chatId, label);
+        }
+      }
+    }
+
+    if (event.type === 'result') return String(event.result || '').trim();
+  } catch {}
+  return null;
+}
+
+// ============================================================
+// CLAUDE -p CORE con streaming de herramientas
+// ============================================================
+function askClaude(message, chatId) {
+  return new Promise((resolve, reject) => {
     const proc = spawn('claude', [
       '--print', '--continue',
-      '--output-format', 'json',
+      '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
       message,
-    ], { env, cwd: WORK_DIR });
+    ], { env: CLAUDE_ENV, cwd: WORK_DIR });
 
-    let stdout = '', stderr = '';
-    proc.stdout.on('data', d => { stdout += d; });
+    let buffer = '', result = '', stderr = '';
+    const seenTools = new Set();
+
+    proc.stdout.on('data', chunk => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const r = parseStreamJson(line, chatId, seenTools);
+        if (r !== null) result = r;
+      }
+    });
+
     proc.stderr.on('data', d => { stderr += d; });
 
     const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error('Timeout (120s)')); }, 120_000);
 
     proc.on('close', code => {
       clearTimeout(timer);
-      console.log(`claude exit=${code} stdout=${stdout.slice(0, 100)}`);
-      try {
-        const data = JSON.parse(stdout.trim());
-        resolve(String(data.result ?? data.message ?? stdout).trim());
-      } catch {
-        resolve(stdout.trim() || stderr.trim() || `Exit ${code}`);
+      // flush buffer
+      if (buffer.trim()) {
+        const r = parseStreamJson(buffer.trim(), chatId, seenTools);
+        if (r !== null) result = r;
       }
+      console.log(`claude exit=${code} result=${result.slice(0, 80)}`);
+      resolve(result || stderr.trim() || `Exit ${code}`);
     });
 
     proc.on('error', err => { clearTimeout(timer); reject(err); });
   });
+}
+
+// ============================================================
+// CLAUDE CON IMAGEN (vision via --input-format stream-json)
+// ============================================================
+function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
+  return new Promise((resolve, reject) => {
+    const input = JSON.stringify({
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Data } },
+          { type: 'text', text: caption || 'Analiza esta imagen.' },
+        ],
+      }],
+    });
+
+    const proc = spawn('claude', [
+      '--print', '--continue',
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+    ], { env: CLAUDE_ENV, cwd: WORK_DIR });
+
+    proc.stdin.write(input);
+    proc.stdin.end();
+
+    let buffer = '', result = '', stderr = '';
+    const seenTools = new Set();
+
+    proc.stdout.on('data', chunk => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const r = parseStreamJson(line, chatId, seenTools);
+        if (r !== null) result = r;
+      }
+    });
+
+    proc.stderr.on('data', d => { stderr += d; });
+
+    const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error('Timeout (120s)')); }, 120_000);
+
+    proc.on('close', code => {
+      clearTimeout(timer);
+      if (buffer.trim()) {
+        const r = parseStreamJson(buffer.trim(), chatId, seenTools);
+        if (r !== null) result = r;
+      }
+      resolve(result || stderr.trim() || `Exit ${code}`);
+    });
+
+    proc.on('error', err => { clearTimeout(timer); reject(err); });
+  });
+}
+
+// ============================================================
+// DESCARGAR ARCHIVO DE TELEGRAM
+// ============================================================
+async function downloadTelegramFile(fileId) {
+  if (!TG_TOKEN) throw new Error('TG_TOKEN no configurado');
+
+  // 1. Obtener file_path
+  const infoRes = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/getFile?file_id=${fileId}`);
+  if (!infoRes.ok) throw new Error(`getFile ${infoRes.status}`);
+  const info = await infoRes.json();
+  const filePath = info.result?.file_path;
+  if (!filePath) throw new Error('file_path vacío');
+
+  // 2. Descargar contenido
+  const fileRes = await fetch(`https://api.telegram.org/file/bot${TG_TOKEN}/${filePath}`);
+  if (!fileRes.ok) throw new Error(`download ${fileRes.status}`);
+  const buffer = Buffer.from(await fileRes.arrayBuffer());
+  return { buffer, filePath };
 }
 
 // ============================================================
@@ -153,7 +296,7 @@ const CMD = {
   hora:       () => new Date().toLocaleTimeString('es-MX'),
   fecha:      () => new Date().toLocaleDateString('es-MX', { weekday:'long', year:'numeric', month:'long', day:'numeric' }),
   uptime:     () => { const s = process.uptime(); return `Uptime: ${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`; },
-  status:     () => `Bridge v4 ✅\nProvider: MiniMax\nUptime: ${Math.floor(process.uptime()/60)}min`,
+  status:     () => `Bridge v5 ✅\nProvider: MiniMax\nUptime: ${Math.floor(process.uptime()/60)}min`,
 
   screenshot: () => {
     const p = path.join(os.tmpdir(), `ss-${Date.now()}.png`);
@@ -193,7 +336,7 @@ const CMD = {
 // ============================================================
 // ROUTER: texto → comando local o Claude
 // ============================================================
-async function route(message) {
+async function route(message, chatId) {
   const text = (message || '').trim();
   if (!text) return '(mensaje vacío)';
 
@@ -205,10 +348,9 @@ async function route(message) {
       try { return handler(args) ?? '✅'; }
       catch (e) { return `Error: ${e.message}`; }
     }
-    // Slash desconocido → Claude
   }
 
-  return await askClaude(text);
+  return await askClaude(text, chatId);
 }
 
 // ============================================================
@@ -223,11 +365,13 @@ function readBody(req) {
   });
 }
 
-function json(res, status, data) {
+function jsonRes(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
   res.end(body);
 }
+
+const IMAGE_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']);
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
@@ -237,21 +381,58 @@ const server = http.createServer(async (req, res) => {
 
   // GET /health
   if (req.method === 'GET' && req.url === '/health') {
-    return json(res, 200, { ok: true, uptime: process.uptime(), provider: MINIMAX_URL });
+    return jsonRes(res, 200, { ok: true, uptime: process.uptime(), provider: MINIMAX_URL });
   }
 
-  // POST /execute  { message: "..." }
+  // POST /execute  { message, chat_id? }
   if (req.method === 'POST' && req.url === '/execute') {
     try {
       const body = await readBody(req);
-      const { message } = JSON.parse(body.toString());
-      if (!message) return json(res, 400, { error: 'message required' });
-      console.log(`[execute] ${String(message).slice(0, 80)}`);
-      const result = await route(message);
-      return json(res, 200, { result });
+      const { message, chat_id } = JSON.parse(body.toString());
+      if (!message) return jsonRes(res, 400, { error: 'message required' });
+      console.log(`[execute] chat=${chat_id} msg=${String(message).slice(0, 80)}`);
+      const result = await route(message, chat_id);
+      return jsonRes(res, 200, { result });
     } catch (e) {
       console.error('[execute] error:', e.message);
-      return json(res, 500, { error: e.message });
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // POST /execute-with-file  { file_id, caption?, chat_id?, mime_type? }
+  if (req.method === 'POST' && req.url === '/execute-with-file') {
+    try {
+      const body = await readBody(req);
+      const { file_id, caption, chat_id, mime_type } = JSON.parse(body.toString());
+      if (!file_id) return jsonRes(res, 400, { error: 'file_id required' });
+
+      console.log(`[execute-with-file] file_id=${file_id} mime=${mime_type} chat=${chat_id}`);
+
+      const { buffer, filePath } = await downloadTelegramFile(file_id);
+      const ext = path.extname(filePath) || '.bin';
+      const tmpPath = path.join(os.tmpdir(), `tg-file-${Date.now()}${ext}`);
+      fs.writeFileSync(tmpPath, buffer);
+
+      let result;
+
+      if (IMAGE_MIMES.has(mime_type)) {
+        // Imagen → visión directa
+        const base64 = buffer.toString('base64');
+        const safeMime = mime_type === 'image/jpg' ? 'image/jpeg' : mime_type;
+        result = await askClaudeWithImage(base64, safeMime, caption || 'Analiza esta imagen.', chat_id);
+      } else {
+        // Archivo → Claude lo lee con sus herramientas
+        const msg = caption
+          ? `${caption}\n\n[Archivo disponible en: ${tmpPath}]`
+          : `Tengo un archivo en: ${tmpPath}\nAnalízalo o úsalo según sea necesario.`;
+        result = await askClaude(msg, chat_id);
+      }
+
+      try { fs.unlinkSync(tmpPath); } catch {}
+      return jsonRes(res, 200, { result });
+    } catch (e) {
+      console.error('[execute-with-file] error:', e.message);
+      return jsonRes(res, 500, { error: e.message });
     }
   }
 
@@ -262,20 +443,20 @@ const server = http.createServer(async (req, res) => {
       const filename = new URL(req.url, 'http://x').searchParams.get('filename') || 'audio.oga';
       console.log(`[transcribe] ${filename} ${audioBuffer.length} bytes`);
       const text = await transcribeBuffer(audioBuffer, filename);
-      return json(res, 200, { text });
+      return jsonRes(res, 200, { text });
     } catch (e) {
       console.error('[transcribe] error:', e.message);
-      return json(res, 500, { error: e.message });
+      return jsonRes(res, 500, { error: e.message });
     }
   }
 
-  json(res, 404, { error: 'Not found' });
+  jsonRes(res, 404, { error: 'Not found' });
 });
 
 server.listen(API_PORT, '0.0.0.0', () => {
-  console.log('🚀 ClaudeClaw Bridge v4 iniciado');
+  console.log('🚀 ClaudeClaw Bridge v5 iniciado');
   console.log(`   API:      http://0.0.0.0:${API_PORT}`);
   console.log(`   Provider: ${MINIMAX_URL}`);
   console.log(`   WorkDir:  ${WORK_DIR}`);
-  console.log('   Modo: API local — n8n maneja Telegram');
+  console.log('   Modo: stream-json + imágenes + archivos');
 });

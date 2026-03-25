@@ -1,5 +1,5 @@
 {
-  "name": "ClaudeClaw Bridge v4",
+  "name": "ClaudeClaw Bridge v5",
   "nodes": [
     {
       "parameters": {
@@ -13,10 +13,7 @@
       "name": "Telegram",
       "webhookId": "b1ec3810-399b-4cae-b6b4-b369235c7999",
       "credentials": {
-        "telegramApi": {
-          "id": "KZgyQyTC9wV8z07R",
-          "name": "ClaudeClaw"
-        }
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
       }
     },
     {
@@ -25,61 +22,41 @@
           "values": [
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict",
-                  "version": 2
-                },
-                "conditions": [
-                  {
-                    "id": "cond-text",
-                    "leftValue": "={{ $json.message.text }}",
-                    "rightValue": "",
-                    "operator": {
-                      "type": "string",
-                      "operation": "exists",
-                      "singleValue": true
-                    }
-                  }
-                ],
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [{ "id": "cond-text", "leftValue": "={{ $json.message.text }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
                 "combinator": "and"
               }
             },
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict",
-                  "version": 2
-                },
-                "conditions": [
-                  {
-                    "id": "cond-voice",
-                    "leftValue": "={{ $json.message.voice.file_id }}",
-                    "rightValue": "",
-                    "operator": {
-                      "type": "string",
-                      "operation": "exists",
-                      "singleValue": true
-                    }
-                  }
-                ],
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [{ "id": "cond-voice", "leftValue": "={{ $json.message.voice.file_id }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [{ "id": "cond-photo", "leftValue": "={{ $json.message.photo }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [{ "id": "cond-doc", "leftValue": "={{ $json.message.document.file_id }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
                 "combinator": "and"
               }
             }
           ]
         },
-        "options": {
-          "fallbackOutput": "extra"
-        }
+        "options": { "fallbackOutput": "extra" }
       },
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.2,
       "position": [-224, 112],
       "id": "b2f87fc8-0398-4d01-a516-af4341f24288",
-      "name": "Switch texto / voz"
+      "name": "Switch tipo mensaje"
     },
     {
       "parameters": {
@@ -104,7 +81,8 @@
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            { "name": "message", "value": "={{ $('Telegram').item.json.message.text }}" }
+            { "name": "message", "value": "={{ $('Telegram').item.json.message.text }}" },
+            { "name": "chat_id", "value": "={{ $('Telegram').item.json.message.chat.id }}" }
           ]
         },
         "options": { "timeout": 120000 }
@@ -117,7 +95,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const MAX_LEN = 3600;\nconst raw = String($json.result ?? '').trim();\n\nfunction filterGarbage(text) {\n  return text\n    .replace(/[\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uf900-\\ufaff]/g, '')\n    .replace(/[\\u0400-\\u04ff\\u0500-\\u052f]/g, '')\n    .replace(/[\\u0600-\\u06ff\\u0750-\\u077f]/g, '')\n    .replace(/[\\uff00-\\uffef\\u3040-\\u30ff]/g, '')\n    .replace(/[^\\x00-\\x7F\\u00C0-\\u024F\\u00A0-\\u00FF\\n]/g, '')\n    .trim();\n}\n\nfunction cleanMarkdown(text) {\n  return String(text)\n    .replace(/```[\\s\\S]*?```/g, '')\n    .replace(/`([^`]+)`/g, '$1')\n    .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '$1')\n    .replace(/\\*\\*(.*?)\\*\\*/g, '$1')\n    .replace(/\\*(.*?)\\*/g, '$1')\n    .replace(/__(.*?)__/g, '$1')\n    .replace(/_(.*?)_/g, '$1')\n    .replace(/_/g, '')\n    .replace(/~~(.*?)~~/g, '$1')\n    .replace(/^[ \\t]*#{1,6}[ \\t]*/gm, '')\n    .replace(/^[ \\t]*>[ \\t]?/gm, '')\n    .replace(/^[ \\t]*[-*][ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*\\d+\\.[ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*([-*_]){3,}[ \\t]*$/gm, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\nfunction splitText(text, maxLen) {\n  if (!text) return ['(sin respuesta)'];\n  if (text.length <= maxLen) return [text];\n  const chunks = [];\n  let remaining = text;\n  while (remaining.length > maxLen) {\n    let cut = remaining.lastIndexOf('\\n\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf('\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) { cut = remaining.lastIndexOf('. ', maxLen); if (cut !== -1) cut += 1; }\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf(' ', maxLen);\n    if (cut < Math.floor(maxLen * 0.4)) cut = maxLen;\n    const part = remaining.slice(0, cut).trim();\n    if (part) chunks.push(part);\n    remaining = remaining.slice(cut).trim();\n  }\n  if (remaining) chunks.push(remaining);\n  return chunks.length ? chunks : ['(sin respuesta)'];\n}\n\nconst filtered = filterGarbage(raw);\nconst cleaned = cleanMarkdown(filtered);\nconst parts = splitText(cleaned, MAX_LEN);\n\nreturn parts.map((part, i) => ({\n  json: {\n    text: part,\n    fragmentIndex: i + 1,\n    fragmentTotal: parts.length\n  }\n}));"
+        "jsCode": "const MAX_LEN = 3600;\nconst raw = String($json.result ?? '').trim();\n\nfunction filterGarbage(text) {\n  return text\n    .replace(/[\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uf900-\\ufaff]/g, '')\n    .replace(/[\\u0400-\\u04ff\\u0500-\\u052f]/g, '')\n    .replace(/[\\u0600-\\u06ff\\u0750-\\u077f]/g, '')\n    .replace(/[\\uff00-\\uffef\\u3040-\\u30ff]/g, '')\n    .trim();\n}\n\nfunction cleanMarkdown(text) {\n  return String(text)\n    .replace(/```[\\s\\S]*?```/g, '')\n    .replace(/`([^`]+)`/g, '$1')\n    .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '$1')\n    .replace(/\\*\\*(.*?)\\*\\*/g, '$1')\n    .replace(/\\*(.*?)\\*/g, '$1')\n    .replace(/__(.*?)__/g, '$1')\n    .replace(/_(.*?)_/g, '$1')\n    .replace(/_/g, '')\n    .replace(/~~(.*?)~~/g, '$1')\n    .replace(/^[ \\t]*#{1,6}[ \\t]*/gm, '')\n    .replace(/^[ \\t]*>[ \\t]?/gm, '')\n    .replace(/^[ \\t]*[-*][ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*\\d+\\.[ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*([-*_]){3,}[ \\t]*$/gm, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\nfunction splitText(text, maxLen) {\n  if (!text) return ['(sin respuesta)'];\n  if (text.length <= maxLen) return [text];\n  const chunks = [];\n  let remaining = text;\n  while (remaining.length > maxLen) {\n    let cut = remaining.lastIndexOf('\\n\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf('\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) { cut = remaining.lastIndexOf('. ', maxLen); if (cut !== -1) cut += 1; }\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf(' ', maxLen);\n    if (cut < Math.floor(maxLen * 0.4)) cut = maxLen;\n    const part = remaining.slice(0, cut).trim();\n    if (part) chunks.push(part);\n    remaining = remaining.slice(cut).trim();\n  }\n  if (remaining) chunks.push(remaining);\n  return chunks.length ? chunks : ['(sin respuesta)'];\n}\n\nconst parts = splitText(cleanMarkdown(filterGarbage(raw)), MAX_LEN);\nreturn parts.map((part, i) => ({ json: { text: part, fragmentIndex: i+1, fragmentTotal: parts.length } }));"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -195,7 +173,8 @@
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            { "name": "message", "value": "={{ $json.text }}" }
+            { "name": "message", "value": "={{ $json.text }}" },
+            { "name": "chat_id", "value": "={{ $('Telegram').item.json.message.chat.id }}" }
           ]
         },
         "options": { "timeout": 120000 }
@@ -208,7 +187,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const MAX_LEN = 3600;\nconst raw = String($json.result ?? '').trim();\nconst whisperText = String($('Whisper').item.json.text ?? '').trim();\n\nfunction filterGarbage(text) {\n  return text\n    .replace(/[\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uf900-\\ufaff]/g, '')\n    .replace(/[\\u0400-\\u04ff\\u0500-\\u052f]/g, '')\n    .replace(/[\\u0600-\\u06ff\\u0750-\\u077f]/g, '')\n    .replace(/[\\uff00-\\uffef\\u3040-\\u30ff]/g, '')\n    .replace(/[^\\x00-\\x7F\\u00C0-\\u024F\\u00A0-\\u00FF\\n]/g, '')\n    .trim();\n}\n\nfunction cleanMarkdown(text) {\n  return String(text)\n    .replace(/```[\\s\\S]*?```/g, '')\n    .replace(/`([^`]+)`/g, '$1')\n    .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '$1')\n    .replace(/\\*\\*(.*?)\\*\\*/g, '$1')\n    .replace(/\\*(.*?)\\*/g, '$1')\n    .replace(/__(.*?)__/g, '$1')\n    .replace(/_(.*?)_/g, '$1')\n    .replace(/_/g, '')\n    .replace(/~~(.*?)~~/g, '$1')\n    .replace(/^[ \\t]*#{1,6}[ \\t]*/gm, '')\n    .replace(/^[ \\t]*>[ \\t]?/gm, '')\n    .replace(/^[ \\t]*[-*][ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*\\d+\\.[ \\t]+/gm, '• ')\n    .replace(/^[ \\t]*([-*_]){3,}[ \\t]*$/gm, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\nfunction splitText(text, maxLen) {\n  if (!text) return ['(sin respuesta)'];\n  if (text.length <= maxLen) return [text];\n  const chunks = [];\n  let remaining = text;\n  while (remaining.length > maxLen) {\n    let cut = remaining.lastIndexOf('\\n\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf('\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) { cut = remaining.lastIndexOf('. ', maxLen); if (cut !== -1) cut += 1; }\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf(' ', maxLen);\n    if (cut < Math.floor(maxLen * 0.4)) cut = maxLen;\n    const part = remaining.slice(0, cut).trim();\n    if (part) chunks.push(part);\n    remaining = remaining.slice(cut).trim();\n  }\n  if (remaining) chunks.push(remaining);\n  return chunks.length ? chunks : ['(sin respuesta)'];\n}\n\nconst filtered = filterGarbage(raw);\nconst cleaned = cleanMarkdown(filtered);\nconst parts = splitText(cleaned, MAX_LEN);\n\nreturn parts.map((part, i) => ({\n  json: {\n    text: i === 0 ? `🎤 \"${whisperText}\"\\n\\n${part}` : part,\n    fragmentIndex: i + 1,\n    fragmentTotal: parts.length\n  }\n}));"
+        "jsCode": "const MAX_LEN = 3600;\nconst raw = String($json.result ?? '').trim();\nconst whisperText = String($('Whisper').item.json.text ?? '').trim();\n\nfunction filterGarbage(text) {\n  return text.replace(/[\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uf900-\\ufaff]/g, '').replace(/[\\u0400-\\u04ff\\u0500-\\u052f]/g, '').replace(/[\\u0600-\\u06ff\\u0750-\\u077f]/g, '').replace(/[\\uff00-\\uffef\\u3040-\\u30ff]/g, '').trim();\n}\n\nfunction cleanMarkdown(text) {\n  return String(text).replace(/```[\\s\\S]*?```/g, '').replace(/`([^`]+)`/g, '$1').replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '$1').replace(/\\*\\*(.*?)\\*\\*/g, '$1').replace(/\\*(.*?)\\*/g, '$1').replace(/__(.*?)__/g, '$1').replace(/_(.*?)_/g, '$1').replace(/_/g, '').replace(/~~(.*?)~~/g, '$1').replace(/^[ \\t]*#{1,6}[ \\t]*/gm, '').replace(/^[ \\t]*>[ \\t]?/gm, '').replace(/^[ \\t]*[-*][ \\t]+/gm, '• ').replace(/^[ \\t]*\\d+\\.[ \\t]+/gm, '• ').replace(/^[ \\t]*([-*_]){3,}[ \\t]*$/gm, '').replace(/\\r\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction splitText(text, maxLen) {\n  if (!text) return ['(sin respuesta)'];\n  if (text.length <= maxLen) return [text];\n  const chunks = []; let remaining = text;\n  while (remaining.length > maxLen) {\n    let cut = remaining.lastIndexOf('\\n\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf('\\n', maxLen);\n    if (cut < Math.floor(maxLen * 0.6)) { cut = remaining.lastIndexOf('. ', maxLen); if (cut !== -1) cut += 1; }\n    if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf(' ', maxLen);\n    if (cut < Math.floor(maxLen * 0.4)) cut = maxLen;\n    const part = remaining.slice(0, cut).trim(); if (part) chunks.push(part);\n    remaining = remaining.slice(cut).trim();\n  }\n  if (remaining) chunks.push(remaining);\n  return chunks.length ? chunks : ['(sin respuesta)'];\n}\n\nconst parts = splitText(cleanMarkdown(filterGarbage(raw)), MAX_LEN);\nreturn parts.map((part, i) => ({ json: { text: i === 0 ? `🎤 \"${whisperText}\"\\n\\n${part}` : part, fragmentIndex: i+1, fragmentTotal: parts.length } }));"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -235,12 +214,109 @@
     {
       "parameters": {
         "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
-        "text": "No puedo procesar ese tipo de mensaje. Envía texto o audio.",
+        "text": "📎 trabajando...",
         "additionalFields": { "appendAttribution": false }
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [0, 368],
+      "position": [0, 416],
+      "id": "ack-photo-id-0001",
+      "credentials": {
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
+      },
+      "name": "ACK foto"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5679/execute-with-file",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "file_id", "value": "={{ $('Telegram').item.json.message.photo[-1].file_id }}" },
+            { "name": "caption", "value": "={{ $('Telegram').item.json.message.caption ?? 'Analiza esta imagen.' }}" },
+            { "name": "chat_id", "value": "={{ $('Telegram').item.json.message.chat.id }}" },
+            { "name": "mime_type", "value": "image/jpeg" }
+          ]
+        },
+        "options": { "timeout": 120000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [224, 416],
+      "id": "claude-photo-id-0001",
+      "name": "Claude (foto)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "📎 trabajando...",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [0, 608],
+      "id": "ack-doc-id-0001",
+      "credentials": {
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
+      },
+      "name": "ACK documento"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5679/execute-with-file",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "file_id", "value": "={{ $('Telegram').item.json.message.document.file_id }}" },
+            { "name": "caption", "value": "={{ $('Telegram').item.json.message.caption ?? '' }}" },
+            { "name": "chat_id", "value": "={{ $('Telegram').item.json.message.chat.id }}" },
+            { "name": "mime_type", "value": "={{ $('Telegram').item.json.message.document.mime_type ?? 'application/octet-stream' }}" }
+          ]
+        },
+        "options": { "timeout": 120000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [224, 608],
+      "id": "claude-doc-id-0001",
+      "name": "Claude (documento)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_LEN = 3600;\nconst raw = String($json.result ?? '').trim();\nfunction filterGarbage(text) { return text.replace(/[\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uf900-\\ufaff]/g, '').replace(/[\\u0400-\\u04ff\\u0500-\\u052f]/g, '').replace(/[\\u0600-\\u06ff\\u0750-\\u077f]/g, '').replace(/[\\uff00-\\uffef\\u3040-\\u30ff]/g, '').trim(); }\nfunction cleanMarkdown(text) { return String(text).replace(/```[\\s\\S]*?```/g, '').replace(/`([^`]+)`/g, '$1').replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '$1').replace(/\\*\\*(.*?)\\*\\*/g, '$1').replace(/\\*(.*?)\\*/g, '$1').replace(/__(.*?)__/g, '$1').replace(/_(.*?)_/g, '$1').replace(/_/g, '').replace(/~~(.*?)~~/g, '$1').replace(/^[ \\t]*#{1,6}[ \\t]*/gm, '').replace(/^[ \\t]*>[ \\t]?/gm, '').replace(/^[ \\t]*[-*][ \\t]+/gm, '• ').replace(/^[ \\t]*\\d+\\.[ \\t]+/gm, '• ').replace(/^[ \\t]*([-*_]){3,}[ \\t]*$/gm, '').replace(/\\r\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim(); }\nfunction splitText(text, maxLen) { if (!text) return ['(sin respuesta)']; if (text.length <= maxLen) return [text]; const chunks = []; let remaining = text; while (remaining.length > maxLen) { let cut = remaining.lastIndexOf('\\n\\n', maxLen); if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf('\\n', maxLen); if (cut < Math.floor(maxLen * 0.6)) { cut = remaining.lastIndexOf('. ', maxLen); if (cut !== -1) cut += 1; } if (cut < Math.floor(maxLen * 0.6)) cut = remaining.lastIndexOf(' ', maxLen); if (cut < Math.floor(maxLen * 0.4)) cut = maxLen; const part = remaining.slice(0, cut).trim(); if (part) chunks.push(part); remaining = remaining.slice(cut).trim(); } if (remaining) chunks.push(remaining); return chunks.length ? chunks : ['(sin respuesta)']; }\nconst parts = splitText(cleanMarkdown(filterGarbage(raw)), MAX_LEN);\nreturn parts.map((part, i) => ({ json: { text: part, fragmentIndex: i+1, fragmentTotal: parts.length } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [448, 512],
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Procesar archivo"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [672, 512],
+      "id": "respuesta-archivo-id-0001",
+      "name": "Respuesta archivo",
+      "credentials": {
+        "telegramApi": { "id": "KZgyQyTC9wV8z07R", "name": "ClaudeClaw" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "No puedo procesar ese tipo de mensaje. Envía texto, audio, imagen o archivo.",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [0, -160],
       "id": "4ad9aa7d-8e8b-47eb-9f61-87f66d526045",
       "name": "No soportado",
       "webhookId": "28279bad-e66c-41e6-b736-b28b95530a6a",
@@ -251,22 +327,29 @@
   ],
   "pinData": {},
   "connections": {
-    "Telegram":           { "main": [[{ "node": "Switch texto / voz", "type": "main", "index": 0 }]] },
-    "Switch texto / voz": {
+    "Telegram":            { "main": [[{ "node": "Switch tipo mensaje",  "type": "main", "index": 0 }]] },
+    "Switch tipo mensaje": {
       "main": [
-        [{ "node": "ACK texto",    "type": "main", "index": 0 }],
-        [{ "node": "ACK voz",      "type": "main", "index": 0 }],
-        [{ "node": "No soportado", "type": "main", "index": 0 }]
+        [{ "node": "ACK texto",      "type": "main", "index": 0 }],
+        [{ "node": "ACK voz",        "type": "main", "index": 0 }],
+        [{ "node": "ACK foto",       "type": "main", "index": 0 }],
+        [{ "node": "ACK documento",  "type": "main", "index": 0 }],
+        [{ "node": "No soportado",   "type": "main", "index": 0 }]
       ]
     },
-    "ACK texto":       { "main": [[{ "node": "Claude (texto)",  "type": "main", "index": 0 }]] },
-    "ACK voz":         { "main": [[{ "node": "Bajar audio",     "type": "main", "index": 0 }]] },
-    "Bajar audio":     { "main": [[{ "node": "Whisper",         "type": "main", "index": 0 }]] },
-    "Whisper":         { "main": [[{ "node": "Claude (voz)",    "type": "main", "index": 0 }]] },
-    "Claude (texto)":  { "main": [[{ "node": "Procesar texto",  "type": "main", "index": 0 }]] },
-    "Claude (voz)":    { "main": [[{ "node": "Procesar voz",    "type": "main", "index": 0 }]] },
-    "Procesar texto":  { "main": [[{ "node": "Respuesta texto", "type": "main", "index": 0 }]] },
-    "Procesar voz":    { "main": [[{ "node": "Respuesta voz",   "type": "main", "index": 0 }]] }
+    "ACK texto":       { "main": [[{ "node": "Claude (texto)",     "type": "main", "index": 0 }]] },
+    "ACK voz":         { "main": [[{ "node": "Bajar audio",        "type": "main", "index": 0 }]] },
+    "ACK foto":        { "main": [[{ "node": "Claude (foto)",      "type": "main", "index": 0 }]] },
+    "ACK documento":   { "main": [[{ "node": "Claude (documento)", "type": "main", "index": 0 }]] },
+    "Bajar audio":     { "main": [[{ "node": "Whisper",            "type": "main", "index": 0 }]] },
+    "Whisper":         { "main": [[{ "node": "Claude (voz)",       "type": "main", "index": 0 }]] },
+    "Claude (texto)":     { "main": [[{ "node": "Procesar texto",   "type": "main", "index": 0 }]] },
+    "Claude (voz)":       { "main": [[{ "node": "Procesar voz",    "type": "main", "index": 0 }]] },
+    "Claude (foto)":      { "main": [[{ "node": "Procesar archivo", "type": "main", "index": 0 }]] },
+    "Claude (documento)": { "main": [[{ "node": "Procesar archivo", "type": "main", "index": 0 }]] },
+    "Procesar texto":  { "main": [[{ "node": "Respuesta texto",   "type": "main", "index": 0 }]] },
+    "Procesar voz":    { "main": [[{ "node": "Respuesta voz",     "type": "main", "index": 0 }]] },
+    "Procesar archivo":{ "main": [[{ "node": "Respuesta archivo", "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": {
