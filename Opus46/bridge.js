@@ -417,18 +417,11 @@ const server = http.createServer(async (req, res) => {
 
       let result;
 
-      if (IMAGE_MIMES.has(mime_type)) {
-        // Imagen → visión directa
-        const base64 = buffer.toString('base64');
-        const safeMime = mime_type === 'image/jpg' ? 'image/jpeg' : mime_type;
-        result = await askClaudeWithImage(base64, safeMime, caption || 'Analiza esta imagen.', chat_id);
-      } else {
-        // Archivo → Claude lo lee con sus herramientas
-        const msg = caption
-          ? `${caption}\n\n[Archivo disponible en: ${tmpPath}]`
-          : `Tengo un archivo en: ${tmpPath}\nAnalízalo o úsalo según sea necesario.`;
-        result = await askClaude(msg, chat_id);
-      }
+      // Imagen o archivo → Claude lo lee con sus herramientas (Read soporta imágenes)
+      const msg = caption
+        ? `${caption}\n\n[Archivo disponible en: ${tmpPath}]`
+        : `Tengo un archivo en: ${tmpPath}\nAnalízalo o úsalo según sea necesario.`;
+      result = await askClaude(msg, chat_id);
 
       try { fs.unlinkSync(tmpPath); } catch {}
       return jsonRes(res, 200, { result });
