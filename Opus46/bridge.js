@@ -412,33 +412,30 @@ const server = http.createServer(async (req, res) => {
 
       const { buffer, filePath } = await downloadTelegramFile(file_id);
       const ext = path.extname(filePath) || '.bin';
-      const tmpPath = path.join(os.tmpdir(), `tg-file-${Date.now()}${ext}`);
-      fs.writeFileSync(tmpPath, buffer);
+      const inboxDir = path.join(WORK_DIR, 'inbox');
+      if (!fs.existsSync(inboxDir)) fs.mkdirSync(inboxDir, { recursive: true });
+      const savedPath = path.join(inboxDir, `tg-${Date.now()}${ext}`);
+      fs.writeFileSync(savedPath, buffer);
 
       let result;
-
-      // PDF → extraer texto con pdftotext y pasarlo directo
       let msg;
       if (mime_type === 'application/pdf') {
         try {
-          const text = execSync(`pdftotext "${tmpPath}" -`, { encoding: 'utf8', timeout: 15000 }).slice(0, 8000);
+          const text = execSync(`pdftotext "${savedPath}" -`, { encoding: 'utf8', timeout: 15000 }).slice(0, 8000);
           msg = caption
-            ? `${caption}\n\nContenido del PDF:\n${text}`
-            : `Analiza este PDF:\n\n${text}`;
+            ? `${caption}\n\nArchivo guardado en: ${savedPath}\n\nContenido del PDF:\n${text}`
+            : `Archivo guardado en: ${savedPath}\n\nContenido del PDF:\n${text}`;
         } catch {
           msg = caption
-            ? `${caption}\n\n[PDF disponible en: ${tmpPath}]`
-            : `Tengo un PDF en: ${tmpPath}\nAnalízalo.`;
+            ? `${caption}\n\n[PDF guardado en: ${savedPath}]`
+            : `Tengo un PDF en: ${savedPath}\nAnalízalo.`;
         }
       } else {
-        // Imagen u otro archivo → Claude lo lee con sus herramientas
         msg = caption
-          ? `${caption}\n\n[Archivo disponible en: ${tmpPath}]`
-          : `Tengo un archivo en: ${tmpPath}\nAnalízalo o úsalo según sea necesario.`;
+          ? `${caption}\n\n[Archivo guardado en: ${savedPath}]`
+          : `Tengo un archivo en: ${savedPath}\nAnalízalo o úsalo según sea necesario.`;
       }
       result = await askClaude(msg, chat_id);
-
-      try { fs.unlinkSync(tmpPath); } catch {}
       return jsonRes(res, 200, { result });
     } catch (e) {
       console.error('[execute-with-file] error:', e.message);
