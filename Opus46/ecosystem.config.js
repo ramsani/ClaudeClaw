@@ -3,7 +3,8 @@ module.exports = {
     name: 'claudeclaw',
     script: './bridge.js',
     cwd: '/Users/papa/0Proyectos/ClaudeClaw/Opus46',
-    instances: 1,           // un solo proceso, siempre
+    exec_mode: 'fork',      // fork mode — bridge.js dueño directo del puerto
+    instances: 1,
     autorestart: true,
     watch: false,
     max_memory_restart: '300M',

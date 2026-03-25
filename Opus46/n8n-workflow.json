@@ -1,0 +1,227 @@
+{
+  "name": "ClaudeClaw Bridge v4",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [-700, 240],
+      "id": "tg-trigger",
+      "name": "Telegram",
+      "credentials": {
+        "telegramApi": {
+          "id": "FLWYmYa5V4hWAURS",
+          "name": "RGSI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.text }}",
+                    "rightValue": "",
+                    "operator": { "type": "string", "operation": "exists", "singleValue": true }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.voice.file_id }}",
+                    "rightValue": "",
+                    "operator": { "type": "string", "operation": "exists", "singleValue": true }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [-480, 240],
+      "id": "switch",
+      "name": "Switch texto / voz"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "👨‍💻 trabajando...",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-260, 140],
+      "id": "ack-texto",
+      "name": "ACK texto",
+      "credentials": {
+        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5679/execute",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "message", "value": "={{ $('Telegram').item.json.message.text }}" }
+          ]
+        },
+        "options": { "timeout": 120000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-40, 140],
+      "id": "claude-texto",
+      "name": "Claude (texto)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "👨‍💻 trabajando...",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-260, 340],
+      "id": "ack-voz",
+      "name": "ACK voz",
+      "credentials": {
+        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Telegram').item.json.message.voice.file_id }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-40, 340],
+      "id": "get-audio",
+      "name": "Bajar audio",
+      "credentials": {
+        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [180, 340],
+      "id": "whisper",
+      "name": "Whisper",
+      "credentials": {
+        "openAiApi": { "id": "9VxiDLtrelh5azBD", "name": "RGSI" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5679/execute",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "message", "value": "={{ $json.text }}" }
+          ]
+        },
+        "options": { "timeout": 120000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 340],
+      "id": "claude-voz",
+      "name": "Claude (voz)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "={{ $json.result }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "replyToMessageId": "={{ $('Telegram').item.json.message.message_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [620, 140],
+      "id": "send-texto",
+      "name": "Respuesta texto",
+      "credentials": {
+        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "=🎤 _\"{{ $('Whisper').item.json.text }}\"_\n\n{{ $json.result }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown",
+          "replyToMessageId": "={{ $('Telegram').item.json.message.message_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [620, 340],
+      "id": "send-voz",
+      "name": "Respuesta voz",
+      "credentials": {
+        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram').item.json.message.chat.id }}",
+        "text": "No puedo procesar ese tipo de mensaje. Envía texto o audio.",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-260, 500],
+      "id": "unsupported",
+      "name": "No soportado",
+      "credentials": {
+        "telegramApi": { "id": "FLWYmYa5V4hWAURS", "name": "RGSI" }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram":           { "main": [[{ "node": "Switch texto / voz", "type": "main", "index": 0 }]] },
+    "Switch texto / voz": {
+      "main": [
+        [{ "node": "ACK texto",    "type": "main", "index": 0 }],
+        [{ "node": "ACK voz",      "type": "main", "index": 0 }],
+        [{ "node": "No soportado", "type": "main", "index": 0 }]
+      ]
+    },
+    "ACK texto":   { "main": [[{ "node": "Claude (texto)", "type": "main", "index": 0 }]] },
+    "ACK voz":     { "main": [[{ "node": "Bajar audio",    "type": "main", "index": 0 }]] },
+    "Bajar audio": { "main": [[{ "node": "Whisper",        "type": "main", "index": 0 }]] },
+    "Whisper":     { "main": [[{ "node": "Claude (voz)",   "type": "main", "index": 0 }]] },
+    "Claude (texto)": { "main": [[{ "node": "Respuesta texto", "type": "main", "index": 0 }]] },
+    "Claude (voz)":   { "main": [[{ "node": "Respuesta voz",  "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": []
+}
