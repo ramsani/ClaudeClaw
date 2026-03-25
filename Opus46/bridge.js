@@ -34,6 +34,25 @@ function loadEnv() {
 loadEnv();
 
 // ============================================================
+// SINGLE INSTANCE LOCK — mata proceso previo si existe
+// ============================================================
+const LOCK_FILE = '/tmp/claudeclaw-bridge.lock';
+(function enforceSingleInstance() {
+  if (fs.existsSync(LOCK_FILE)) {
+    const oldPid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8').trim(), 10);
+    if (oldPid && oldPid !== process.pid) {
+      try { process.kill(oldPid, 'SIGTERM'); console.log(`Killed old instance PID ${oldPid}`); }
+      catch {} // ya no existía
+    }
+  }
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
+  const cleanup = () => { try { fs.unlinkSync(LOCK_FILE); } catch {} process.exit(); };
+  process.on('exit', () => { try { fs.unlinkSync(LOCK_FILE); } catch {} });
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+})();
+
+// ============================================================
 // CONFIG
 // ============================================================
 const TG_TOKEN    = process.env.TG_TOKEN;
@@ -55,22 +74,40 @@ const OFFSET_FILE = path.join(__dirname, '.telegram-offset');
 // TELEGRAM HELPERS
 // ============================================================
 
-function tgRequest(method, data) {
+function tgRequestOnce(method, data) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
     const url  = new URL(`${TG_API}/${method}`);
     const req  = https.request({
       hostname: url.hostname, path: url.pathname, method: 'POST',
+      timeout: 15000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
     }, res => {
       let raw = '';
       res.on('data', c => raw += c);
       res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(raw); } });
     });
+    req.on('timeout', () => { req.destroy(); reject(new Error('TIMEOUT')); });
     req.on('error', reject);
     req.write(body);
     req.end();
   });
+}
+
+// Retry automático en errores de red (ETIMEDOUT, ECONNRESET, etc.)
+async function tgRequest(method, data, retries = 4) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await tgRequestOnce(method, data);
+    } catch (e) {
+      const retryable = ['ETIMEDOUT','ECONNRESET','ECONNREFUSED','TIMEOUT','EHOSTUNREACH'].includes(e.code || e.message);
+      if (retryable && i < retries) {
+        await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 function sendMsg(chatId, text, replyTo) {
@@ -169,13 +206,12 @@ function askClaude(message, opts = {}) {
 
     proc.on('close', code => {
       clearTimeout(timer);
+      console.log(`claude exit=${code} stdout=${stdout.slice(0,200)} stderr=${stderr.slice(0,200)}`);
       try {
         const data = JSON.parse(stdout.trim());
-        // claude -p json schema: { result, session_id, cost_usd, duration_ms, ... }
         const text = data.result ?? data.message ?? stdout.trim();
         resolve(String(text).trim());
       } catch {
-        // Fallback: return raw stdout if JSON parse fails
         const raw = stdout.trim() || stderr.trim() || `Exit ${code}`;
         resolve(raw);
       }
@@ -199,9 +235,8 @@ async function transcribeVoice(fileId) {
 
   const audioUrl = `https://api.telegram.org/file/bot${TG_TOKEN}/${info.result.file_path}`;
   const ogaPath  = path.join(os.tmpdir(), `vc-${Date.now()}.oga`);
-  const mp3Path  = path.join(os.tmpdir(), `vc-${Date.now()}.mp3`);
 
-  // 2. Download
+  // 2. Download .oga directo (Whisper acepta ogg/oga — sin ffmpeg, ~150ms menos)
   await new Promise((res, rej) => {
     https.get(audioUrl, r => {
       const s = fs.createWriteStream(ogaPath);
@@ -211,16 +246,12 @@ async function transcribeVoice(fileId) {
     }).on('error', rej);
   });
 
-  // 3. Convert to mp3
-  try { execSync(`ffmpeg -y -i "${ogaPath}" -vn -acodec libmp3lame -q:a 2 "${mp3Path}" 2>/dev/null`); }
-  catch { fs.copyFileSync(ogaPath, mp3Path); }
-
-  // 4. Whisper
-  const fileContent = fs.readFileSync(mp3Path);
+  // 3. Whisper directo con .oga
+  const fileContent = fs.readFileSync(ogaPath);
   const boundary    = 'w' + Math.random().toString(36).slice(2);
   const body        = Buffer.concat([
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n`),
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.mp3"\r\nContent-Type: audio/mpeg\r\n\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.oga"\r\nContent-Type: audio/ogg\r\n\r\n`),
     fileContent,
     Buffer.from(`\r\n--${boundary}--\r\n`)
   ]);
@@ -234,13 +265,10 @@ async function transcribeVoice(fileId) {
     body
   });
 
+  try { fs.unlinkSync(ogaPath); } catch {}
+
   if (!whisperRes.ok) throw new Error(`Whisper ${whisperRes.status}`);
   const wData = await whisperRes.json();
-
-  // Cleanup
-  try { fs.unlinkSync(ogaPath); } catch {}
-  try { fs.unlinkSync(mp3Path); } catch {}
-
   return (wData.text || '').trim();
 }
 
@@ -375,6 +403,7 @@ async function handleMessage(msg) {
 
   // --- VOICE ---
   if (isVoice) {
+    await sendMsg(chatId, '👨‍💻 trabajando...', replyTo);  // ACK visible inmediato
     const typingLoop = startTyping(chatId);
     try {
       const transcript = await transcribeVoice(msg.voice.file_id);
@@ -410,6 +439,7 @@ async function handleMessage(msg) {
   }
 
   // --- NATURAL LANGUAGE / UNKNOWN COMMAND → CLAUDE CODE ---
+  await sendMsg(chatId, '👨‍💻 trabajando...', replyTo);  // ACK visible inmediato
   const typingLoop = startTyping(chatId);
   try {
     const response = await askClaude(text);
@@ -434,23 +464,96 @@ function stopTyping(interval) {
 }
 
 // ============================================================
-// POLLING LOOP
+// WEBHOOK HTTP SERVER
 // ============================================================
 
-async function poll() {
-  console.log('🚀 ClaudeClaw Bridge v3 iniciado');
-  console.log(`   Provider: ${MINIMAX_URL}`);
-  console.log(`   WorkDir:  ${WORK_DIR}`);
+const WEBHOOK_PORT   = 5679;
+const WEBHOOK_SECRET = require('crypto').randomBytes(16).toString('hex');
 
+function startWebhookServer() {
+  return new Promise(resolve => {
+    const server = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/health') {
+        res.writeHead(200); res.end(JSON.stringify({ ok: true, uptime: process.uptime() }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === `/wh/${WEBHOOK_SECRET}`) {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+          res.writeHead(200); res.end('ok');
+          try {
+            const upd = JSON.parse(body);
+            if (upd.message && !upd.message.from?.is_bot) {
+              handleMessage(upd.message).catch(e =>
+                console.error('handleMessage ERROR:', e?.message || e, e?.stack || ''));
+            }
+          } catch (e) { console.error('Webhook parse error:', e.message); }
+        });
+        return;
+      }
+      res.writeHead(404); res.end();
+    });
+    server.listen(WEBHOOK_PORT, () => {
+      console.log(`   Webhook server: http://localhost:${WEBHOOK_PORT}`);
+      resolve(server);
+    });
+  });
+}
+
+// ============================================================
+// CLOUDFLARED TUNNEL — lanza tunnel y extrae URL pública
+// ============================================================
+
+function startTunnel() {
+  return new Promise((resolve, reject) => {
+    console.log('   Iniciando cloudflared tunnel...');
+    const cf = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${WEBHOOK_PORT}`], {
+      env: process.env,
+    });
+
+    const timeout = setTimeout(() => reject(new Error('cloudflared timeout')), 30000);
+
+    const onData = (data) => {
+      const text = data.toString();
+      process.stdout.write(text);
+      // cloudflared imprime la URL pública en stderr
+      const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+      if (match) {
+        clearTimeout(timeout);
+        cf.stderr.off('data', onData);
+        cf.stdout.off('data', onData);
+        resolve({ url: match[0], proc: cf });
+      }
+    };
+
+    cf.stderr.on('data', onData);
+    cf.stdout.on('data', onData);
+    cf.on('error', err => { clearTimeout(timeout); reject(err); });
+    cf.on('close', code => {
+      if (code !== 0) console.warn(`cloudflared exited with code ${code}`);
+    });
+
+    // Reemitir logs de cloudflared
+    process.on('exit', () => cf.kill());
+  });
+}
+
+// ============================================================
+// POLLING FALLBACK (si cloudflared falla)
+// ============================================================
+
+async function pollFallback() {
+  console.log('   Modo fallback: long-polling');
   while (true) {
     try {
       const offset  = loadOffset();
       const updates = await tgRequest('getUpdates', { offset, timeout: 30 });
-
       if (updates.ok && updates.result?.length) {
         for (const upd of updates.result) {
           if (upd.message && !upd.message.from?.is_bot) {
-            handleMessage(upd.message).catch(e => console.error('handleMessage:', e.message));
+            handleMessage(upd.message).catch(e =>
+              console.error('handleMessage ERROR:', e?.message || e, e?.stack || ''));
           }
           saveOffset(upd.update_id + 1);
         }
@@ -462,4 +565,40 @@ async function poll() {
   }
 }
 
-poll();
+// ============================================================
+// MAIN
+// ============================================================
+
+async function main() {
+  console.log('🚀 ClaudeClaw Bridge v3 iniciado');
+  console.log(`   Provider: ${MINIMAX_URL}`);
+  console.log(`   WorkDir:  ${WORK_DIR}`);
+
+  await startWebhookServer();
+
+  // Limpiar webhook existente (error no es fatal)
+  try { await tgRequest('deleteWebhook', { drop_pending_updates: false }); } catch {}
+
+  try {
+    const { url } = await startTunnel();
+    const webhookUrl = `${url}/wh/${WEBHOOK_SECRET}`;
+    console.log(`   Tunnel URL: ${url}`);
+
+    // Esperar que el DNS del túnel propague antes de registrar
+    let result;
+    for (let i = 1; i <= 5; i++) {
+      await new Promise(r => setTimeout(r, 4000));
+      result = await tgRequest('setWebhook', { url: webhookUrl, allowed_updates: ['message'] });
+      if (result.ok) break;
+      console.log(`   Webhook intento ${i}/5: ${result.description}`);
+    }
+    console.log(`   Webhook registrado: ${result.ok ? '✅' : '❌ ' + result.description}`);
+    console.log('   Modo: webhook (Telegram push) ⚡');
+  } catch (e) {
+    console.warn(`   Tunnel falló (${e.message}), usando polling como fallback`);
+    await tgRequest('deleteWebhook', {});
+    pollFallback();
+  }
+}
+
+main();
