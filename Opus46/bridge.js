@@ -69,7 +69,7 @@ const TG_TOKEN    = process.env.TG_TOKEN;
 const MINIMAX_URL = process.env.ANTHROPIC_BASE_URL;
 const MINIMAX_KEY = process.env.ANTHROPIC_AUTH_TOKEN;
 const API_PORT    = parseInt(process.env.BRIDGE_PORT || '5679', 10);
-const WORK_DIR    = path.join(os.homedir(), '0Proyectos', 'ClaudeClaw');
+const WORK_DIR    = path.join(os.homedir(), '0Proyectos', 'MyClaw');
 
 if (!MINIMAX_KEY) {
   console.error('❌ Falta ANTHROPIC_AUTH_TOKEN en .env');
