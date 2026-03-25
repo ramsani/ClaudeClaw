@@ -1,0 +1,17 @@
+# Credenciales — NUNCA subir al repo
+.env
+*.env
+.env.local
+
+# Offsets y estado temporal
+.telegram-offset
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Backups
+backups/
