@@ -37,7 +37,7 @@
             {
               "conditions": {
                 "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
-                "conditions": [{ "id": "cond-photo", "leftValue": "={{ $json.message.photo ? $json.message.photo[$json.message.photo.length-1].file_id : '' }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
+                "conditions": [{ "id": "cond-photo", "leftValue": "={{ $json.message.photo ? $json.message.photo[$json.message.photo.length-1].file_id : '' }}", "rightValue": "", "operator": { "type": "string", "operation": "notEmpty", "singleValue": true } }],
                 "combinator": "and"
               }
             },
