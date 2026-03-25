@@ -147,7 +147,7 @@ function parseStreamJson(line, chatId, seenTools) {
 function askClaude(message, chatId) {
   return new Promise((resolve, reject) => {
     const proc = spawn('claude', [
-      '--print', '--continue',
+      '--print', '--continue', '--verbose',
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
       message,
@@ -202,7 +202,7 @@ function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
     });
 
     const proc = spawn('claude', [
-      '--print', '--continue',
+      '--print', '--continue', '--verbose',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
