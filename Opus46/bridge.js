@@ -417,10 +417,25 @@ const server = http.createServer(async (req, res) => {
 
       let result;
 
-      // Imagen o archivo → Claude lo lee con sus herramientas (Read soporta imágenes)
-      const msg = caption
-        ? `${caption}\n\n[Archivo disponible en: ${tmpPath}]`
-        : `Tengo un archivo en: ${tmpPath}\nAnalízalo o úsalo según sea necesario.`;
+      // PDF → extraer texto con pdftotext y pasarlo directo
+      let msg;
+      if (mime_type === 'application/pdf') {
+        try {
+          const text = execSync(`pdftotext "${tmpPath}" -`, { encoding: 'utf8', timeout: 15000 }).slice(0, 8000);
+          msg = caption
+            ? `${caption}\n\nContenido del PDF:\n${text}`
+            : `Analiza este PDF:\n\n${text}`;
+        } catch {
+          msg = caption
+            ? `${caption}\n\n[PDF disponible en: ${tmpPath}]`
+            : `Tengo un PDF en: ${tmpPath}\nAnalízalo.`;
+        }
+      } else {
+        // Imagen u otro archivo → Claude lo lee con sus herramientas
+        msg = caption
+          ? `${caption}\n\n[Archivo disponible en: ${tmpPath}]`
+          : `Tengo un archivo en: ${tmpPath}\nAnalízalo o úsalo según sea necesario.`;
+      }
       result = await askClaude(msg, chat_id);
 
       try { fs.unlinkSync(tmpPath); } catch {}
