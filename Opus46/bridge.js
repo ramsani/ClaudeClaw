@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * ClaudeClaw Bridge v5
- * Arquitectura: API local pura — n8n maneja Telegram, este bridge ejecuta Claude
+ * ClaudeClaw Bridge v3
+ * Arquitectura: cola serializada + sesión persistente + historial SQLite
  *
  * POST http://localhost:5679/execute           { "message": "texto", "chat_id": "..." }
  *   → { "result": "..." }
@@ -13,7 +13,13 @@
  *   → { "text": "transcripción" }
  *
  * GET  http://localhost:5679/health
- *   → { "ok": true, "uptime": N }
+ *   → { "ok": true, "uptime": N, "queue": {...} }
+ *
+ * GET  http://localhost:5679/api/history?limit=50&before=<unix_ms>&q=<search>&starred=1
+ *   → [ { id, uuid, channel, role, content, ... } ]
+ *
+ * GET  http://localhost:5679/api/queue
+ *   → { busy, size, maxSize }
  */
 'use strict';
 
@@ -22,6 +28,7 @@ const { execSync, spawn } = require('child_process');
 const fs     = require('fs');
 const path   = require('path');
 const os     = require('os');
+const crypto = require('crypto');
 
 // ============================================================
 // CARGAR .env
@@ -41,6 +48,18 @@ function loadEnv() {
     });
 }
 loadEnv();
+
+// ============================================================
+// MÓDULOS V3
+// ============================================================
+const db      = require('./lib/db');
+const session = require('./lib/session');
+const queue   = require('./lib/queue');
+const auth    = require('./lib/auth');
+const ws      = require('./lib/ws');
+const files   = require('./lib/files');
+
+db.init();
 
 // ============================================================
 // SINGLE INSTANCE LOCK
@@ -69,7 +88,8 @@ const TG_TOKEN    = process.env.TG_TOKEN;
 const MINIMAX_URL = process.env.ANTHROPIC_BASE_URL;
 const MINIMAX_KEY = process.env.ANTHROPIC_AUTH_TOKEN;
 const API_PORT    = parseInt(process.env.BRIDGE_PORT || '5679', 10);
-const WORK_DIR    = path.join(os.homedir(), '0Proyectos', 'MyClaw');
+const TIMEOUT_MS  = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10);
+const WORK_DIR    = process.env.WORK_DIR || path.join(os.homedir(), '0Proyectos', 'MyClaw');
 
 if (!MINIMAX_KEY) {
   console.error('❌ Falta ANTHROPIC_AUTH_TOKEN en .env');
@@ -118,11 +138,21 @@ async function sendTelegramProgress(chatId, text) {
 }
 
 // ============================================================
-// PARSEAR STREAM-JSON Y EXTRAER TOOL CALLS
+// PARSEAR STREAM-JSON — extrae tools, resultado y session_id
 // ============================================================
-function parseStreamJson(line, chatId, seenTools) {
+function parseStreamJson(line, chatId, seenTools, sessionRef, messageUuid) {
   try {
     const event = JSON.parse(line);
+
+    // Capturar session_id desde evento system.init
+    if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
+      if (sessionRef && !sessionRef.id) sessionRef.id = event.session_id;
+    }
+
+    // Capturar session_id desde evento result
+    if (event.type === 'result' && event.session_id) {
+      if (sessionRef && !sessionRef.id) sessionRef.id = event.session_id;
+    }
 
     // Tool calls en mensajes del asistente
     if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
@@ -132,6 +162,8 @@ function parseStreamJson(line, chatId, seenTools) {
           const fn = TOOL_LABELS[block.name];
           const label = fn ? fn(block.input || {}) : `🔧 ${block.name}`;
           sendTelegramProgress(chatId, label);
+          // Broadcast thinking event a PWA
+          ws.broadcast({ type: 'thinking', tool: block.name, label, message_uuid: messageUuid });
         }
       }
     }
@@ -142,21 +174,19 @@ function parseStreamJson(line, chatId, seenTools) {
 }
 
 // ============================================================
-// CLAUDE -p CORE con streaming de herramientas
+// CLAUDE CORE — con sesión persistente y captura de session_id
 // ============================================================
-function askClaude(message, chatId) {
+function _spawnClaude(args, chatId, channel, messageUuid) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('claude', [
-      '--print', '--continue', '--verbose',
-      '--output-format', 'stream-json',
-      '--dangerously-skip-permissions',
-      message,
-    ], { env: CLAUDE_ENV, cwd: WORK_DIR });
+    const proc = spawn('claude', args, { env: CLAUDE_ENV, cwd: WORK_DIR });
 
     sendTelegramProgress(chatId, '⚡ Claude arrancó');
+    ws.broadcast({ type: 'typing', active: true, channel: channel || 'telegram', chat_id: chatId });
 
     let buffer = '', result = '', stderr = '';
     const seenTools = new Set();
+    const sessionRef = { id: null };
+    let sessionNotFound = false;
 
     proc.stdout.on('data', chunk => {
       buffer += chunk.toString();
@@ -164,28 +194,85 @@ function askClaude(message, chatId) {
       buffer = lines.pop();
       for (const line of lines) {
         if (!line.trim()) continue;
-        const r = parseStreamJson(line, chatId, seenTools);
+        const r = parseStreamJson(line, chatId, seenTools, sessionRef, messageUuid);
         if (r !== null) result = r;
       }
     });
 
-    proc.stderr.on('data', d => { stderr += d; });
+    proc.stderr.on('data', d => {
+      const txt = d.toString();
+      stderr += txt;
+      if (/session.not.found|No session|invalid.session|Session.*not.*found/i.test(txt)) {
+        sessionNotFound = true;
+      }
+    });
 
-    const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error('Timeout (120s)')); }, 120_000);
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      reject(Object.assign(new Error(`timeout after ${TIMEOUT_MS}ms`), { code: 'timeout' }));
+    }, TIMEOUT_MS);
 
     proc.on('close', code => {
       clearTimeout(timer);
-      // flush buffer
       if (buffer.trim()) {
-        const r = parseStreamJson(buffer.trim(), chatId, seenTools);
+        const r = parseStreamJson(buffer.trim(), chatId, seenTools, sessionRef, messageUuid);
         if (r !== null) result = r;
       }
+
+      // Guardar session_id si lo capturamos
+      if (sessionRef.id) {
+        session.saveSession(sessionRef.id);
+        console.log(`[session] guardado ${sessionRef.id}`);
+      }
+
+      ws.broadcast({ type: 'typing', active: false });
       console.log(`claude exit=${code} result=${result.slice(0, 80)}`);
-      resolve(result || stderr.trim() || `Exit ${code}`);
+
+      if (sessionNotFound) {
+        reject(Object.assign(new Error('session_not_found'), { code: 'session_not_found' }));
+        return;
+      }
+
+      resolve({ result: result || stderr.trim() || `Exit ${code}`, sessionId: sessionRef.id });
     });
 
     proc.on('error', err => { clearTimeout(timer); reject(err); });
   });
+}
+
+// Construir args para claude según si tenemos sesión guardada
+function buildClaudeArgs(message, uuid) {
+  const base = [
+    '--print', '--verbose',
+    '--output-format', 'stream-json',
+    '--dangerously-skip-permissions',
+  ];
+
+  if (uuid) {
+    return ['--resume', uuid, ...base, message];
+  }
+  return [...base, '--continue', message];
+}
+
+// askClaude con retry automático si session_not_found
+async function askClaude(message, chatId, channel, messageUuid) {
+  const uuid = session.loadSession();
+
+  try {
+    const { result } = await _spawnClaude(buildClaudeArgs(message, uuid), chatId, channel, messageUuid);
+    return result;
+  } catch (err) {
+    if (err.code === 'session_not_found' && uuid) {
+      console.warn('[bridge] session no encontrada, limpiando y reintentando sin --resume');
+      session.clearSession();
+      const { result } = await _spawnClaude(
+        buildClaudeArgs(message, null),
+        chatId, channel, messageUuid
+      );
+      return result;
+    }
+    throw err;
+  }
 }
 
 // ============================================================
@@ -203,18 +290,24 @@ function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
       }],
     });
 
-    const proc = spawn('claude', [
-      '--print', '--continue', '--verbose',
+    const uuid = session.loadSession();
+    const args = [
+      '--print',
+      ...(uuid ? ['--resume', uuid] : ['--continue']),
+      '--verbose',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
-    ], { env: CLAUDE_ENV, cwd: WORK_DIR });
+    ];
+
+    const proc = spawn('claude', args, { env: CLAUDE_ENV, cwd: WORK_DIR });
 
     proc.stdin.write(input);
     proc.stdin.end();
 
     let buffer = '', result = '', stderr = '';
     const seenTools = new Set();
+    const sessionRef = { id: null };
 
     proc.stdout.on('data', chunk => {
       buffer += chunk.toString();
@@ -222,21 +315,22 @@ function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
       buffer = lines.pop();
       for (const line of lines) {
         if (!line.trim()) continue;
-        const r = parseStreamJson(line, chatId, seenTools);
+        const r = parseStreamJson(line, chatId, seenTools, sessionRef);
         if (r !== null) result = r;
       }
     });
 
     proc.stderr.on('data', d => { stderr += d; });
 
-    const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error('Timeout (120s)')); }, 120_000);
+    const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error(`timeout after ${TIMEOUT_MS}ms`)); }, TIMEOUT_MS);
 
     proc.on('close', code => {
       clearTimeout(timer);
       if (buffer.trim()) {
-        const r = parseStreamJson(buffer.trim(), chatId, seenTools);
+        const r = parseStreamJson(buffer.trim(), chatId, seenTools, sessionRef);
         if (r !== null) result = r;
       }
+      if (sessionRef.id) session.saveSession(sessionRef.id);
       resolve(result || stderr.trim() || `Exit ${code}`);
     });
 
@@ -250,17 +344,18 @@ function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
 async function downloadTelegramFile(fileId) {
   if (!TG_TOKEN) throw new Error('TG_TOKEN no configurado');
 
-  // 1. Obtener file_path
   const infoRes = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/getFile?file_id=${fileId}`);
   if (!infoRes.ok) throw new Error(`getFile ${infoRes.status}`);
   const info = await infoRes.json();
   const filePath = info.result?.file_path;
   if (!filePath) throw new Error('file_path vacío');
 
-  // 2. Descargar contenido
   const fileRes = await fetch(`https://api.telegram.org/file/bot${TG_TOKEN}/${filePath}`);
   if (!fileRes.ok) throw new Error(`download ${fileRes.status}`);
+  const contentLength = parseInt(fileRes.headers.get('content-length') || '0', 10);
+  if (contentLength > 20 * 1024 * 1024) throw new Error('file_too_large');
   const buffer = Buffer.from(await fileRes.arrayBuffer());
+  if (buffer.length > 20 * 1024 * 1024) throw new Error('file_too_large');
   return { buffer, filePath };
 }
 
@@ -276,14 +371,22 @@ async function transcribeBuffer(audioBuffer, filename) {
     Buffer.from(`\r\n--${boundary}--\r\n`),
   ]);
 
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENAI_KEY}`,
-      'Content-Type':  `multipart/form-data; boundary=${boundary}`,
-    },
-    body,
-  });
+  const controller = new AbortController();
+  const whisperTimer = setTimeout(() => controller.abort(), 60_000);
+  let res;
+  try {
+    res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_KEY}`,
+        'Content-Type':  `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(whisperTimer);
+  }
 
   if (!res.ok) throw new Error(`Whisper ${res.status}`);
   const data = await res.json();
@@ -298,7 +401,10 @@ const CMD = {
   hora:       () => new Date().toLocaleTimeString('es-MX'),
   fecha:      () => new Date().toLocaleDateString('es-MX', { weekday:'long', year:'numeric', month:'long', day:'numeric' }),
   uptime:     () => { const s = process.uptime(); return `Uptime: ${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`; },
-  status:     () => `Bridge v5 ✅\nProvider: MiniMax\nUptime: ${Math.floor(process.uptime()/60)}min`,
+  status:     () => {
+    const q = queue.status();
+    return `Bridge v3 ✅\nProvider: MiniMax\nUptime: ${Math.floor(process.uptime()/60)}min\nCola: ${q.size}/${q.maxSize} (busy: ${q.busy})`;
+  },
 
   screenshot: () => {
     const p = path.join(os.tmpdir(), `ss-${Date.now()}.png`);
@@ -336,12 +442,13 @@ const CMD = {
 };
 
 // ============================================================
-// ROUTER: texto → comando local o Claude
+// ROUTER: texto → comando local o Claude (via cola)
 // ============================================================
-async function route(message, chatId) {
+async function route(message, chatId, channel = 'telegram') {
   const text = (message || '').trim();
   if (!text) return '(mensaje vacío)';
 
+  // Comandos locales no pasan por la cola
   if (text.startsWith('/')) {
     const [rawCmd, ...args] = text.slice(1).trim().split(/\s+/);
     const cmd = rawCmd.toLowerCase().split('@')[0];
@@ -352,16 +459,66 @@ async function route(message, chatId) {
     }
   }
 
-  return await askClaude(text, chatId);
+  // Guardar mensaje del usuario en SQLite + broadcast WS
+  const userUuid = crypto.randomUUID();
+  const now = Date.now();
+  try {
+    db.insertMessage({
+      uuid: userUuid,
+      channel,
+      role: 'user',
+      content: text,
+      chat_id: chatId ? String(chatId) : null,
+      session_uuid: session.loadSession(),
+      file_path: null,
+    });
+  } catch (e) {
+    console.error('[db] insertMessage user error:', e.message);
+  }
+  ws.broadcast({ type: 'message', role: 'user', content: text, uuid: userUuid, channel, created_at: now });
+
+  // Encolar llamada a Claude (pasando uuid para correlacionar thinking events)
+  const assistantUuid = crypto.randomUUID();
+  const result = await queue.push(() => askClaude(text, chatId, channel, assistantUuid));
+
+  // Guardar respuesta del asistente en SQLite + broadcast WS
+  const assistantNow = Date.now();
+  try {
+    db.insertMessage({
+      uuid: assistantUuid,
+      channel,
+      role: 'assistant',
+      content: result,
+      chat_id: chatId ? String(chatId) : null,
+      session_uuid: session.loadSession(),
+      file_path: null,
+    });
+  } catch (e) {
+    console.error('[db] insertMessage assistant error:', e.message);
+  }
+  ws.broadcast({ type: 'message', role: 'assistant', content: result, uuid: assistantUuid, channel, created_at: assistantNow });
+
+  return result;
 }
 
 // ============================================================
 // HTTP API SERVER
 // ============================================================
+const MAX_BODY = 16 * 1024 * 1024; // 16MB
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', c => chunks.push(c));
+    let total = 0;
+    req.on('data', c => {
+      total += c.length;
+      if (total > MAX_BODY) {
+        req.destroy();
+        reject(Object.assign(new Error('request_too_large'), { code: 'too_large' }));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end',  () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
@@ -377,13 +534,45 @@ const IMAGE_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/gif'
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Bridge-Token',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    });
     res.end(); return;
   }
 
   // GET /health
   if (req.method === 'GET' && req.url === '/health') {
-    return jsonRes(res, 200, { ok: true, uptime: process.uptime(), provider: MINIMAX_URL });
+    return jsonRes(res, 200, {
+      ok: true,
+      uptime: process.uptime(),
+      provider: MINIMAX_URL,
+      queue: queue.status(),
+      session: session.loadSession(),
+    });
+  }
+
+  // GET /api/queue
+  if (req.method === 'GET' && req.url === '/api/queue') {
+    return jsonRes(res, 200, queue.status());
+  }
+
+  // GET /api/history?limit=50&before=<unix_ms>&q=<search>&starred=1
+  if (req.method === 'GET' && req.url.startsWith('/api/history')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const params = new URL(req.url, 'http://x').searchParams;
+      const limitRaw = parseInt(params.get('limit') || '50', 10);
+      const limit   = Math.min(Number.isFinite(limitRaw) ? limitRaw : 50, 200);
+      const before  = params.get('before') ? parseInt(params.get('before'), 10) : null;
+      const q       = params.get('q') || null;
+      const starred = params.get('starred') === '1';
+      const messages = db.getHistory({ limit, before, q, starred });
+      return jsonRes(res, 200, messages);
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
   }
 
   // POST /execute  { message, chat_id? }
@@ -393,7 +582,14 @@ const server = http.createServer(async (req, res) => {
       const { message, chat_id } = JSON.parse(body.toString());
       if (!message) return jsonRes(res, 400, { error: 'message required' });
       console.log(`[execute] chat=${chat_id} msg=${String(message).slice(0, 80)}`);
-      const result = await route(message, chat_id);
+
+      let result;
+      try {
+        result = await route(message, chat_id, 'telegram');
+      } catch (e) {
+        if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
+        throw e;
+      }
       return jsonRes(res, 200, { result });
     } catch (e) {
       console.error('[execute] error:', e.message);
@@ -430,12 +626,56 @@ const server = http.createServer(async (req, res) => {
             ? `${caption}\n\n[PDF guardado en: ${savedPath}]`
             : `Tengo un PDF en: ${savedPath}\nAnalízalo.`;
         }
+        try {
+          result = await route(msg, chat_id, 'telegram');
+        } catch (e) {
+          if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
+          throw e;
+        }
+      } else if (IMAGE_MIMES.has(mime_type)) {
+        const base64Data = buffer.toString('base64');
+        const fileUuid = crypto.randomUUID();
+        try {
+          db.insertMessage({
+            uuid: fileUuid,
+            channel: 'telegram',
+            role: 'user',
+            content: caption || '[imagen]',
+            chat_id: chat_id ? String(chat_id) : null,
+            session_uuid: session.loadSession(),
+            file_path: savedPath,
+          });
+        } catch {}
+        try {
+          result = await queue.push(() => askClaudeWithImage(base64Data, mime_type, caption, chat_id));
+        } catch (e) {
+          if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
+          throw e;
+        }
+        const assistantUuid = crypto.randomUUID();
+        try {
+          db.insertMessage({
+            uuid: assistantUuid,
+            channel: 'telegram',
+            role: 'assistant',
+            content: result,
+            chat_id: chat_id ? String(chat_id) : null,
+            session_uuid: session.loadSession(),
+            file_path: null,
+          });
+        } catch {}
       } else {
         msg = caption
           ? `${caption}\n\n[Archivo guardado en: ${savedPath}]`
           : `Tengo un archivo en: ${savedPath}\nAnalízalo o úsalo según sea necesario.`;
+        try {
+          result = await route(msg, chat_id, 'telegram');
+        } catch (e) {
+          if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
+          throw e;
+        }
       }
-      result = await askClaude(msg, chat_id);
+
       return jsonRes(res, 200, { result });
     } catch (e) {
       console.error('[execute-with-file] error:', e.message);
@@ -443,8 +683,75 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // POST /api/login  { password }
+  if (req.method === 'POST' && req.url === '/api/login') {
+    const body = await readBody(req);
+    return auth.loginHandler(req, res, body);
+  }
+
+  // POST /api/chat  { message, chat_id? }  — PWA mensajes (requiere auth)
+  if (req.method === 'POST' && req.url === '/api/chat') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const body = await readBody(req);
+      const { message, chat_id } = JSON.parse(body.toString());
+      if (!message) return jsonRes(res, 400, { error: 'message required' });
+      console.log(`[api/chat] msg=${String(message).slice(0, 80)}`);
+      let result;
+      try {
+        result = await route(message, chat_id || null, 'pwa');
+      } catch (e) {
+        if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
+        throw e;
+      }
+      return jsonRes(res, 200, { result });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // POST /api/desktop-event  { role, content }  — hook de Claude Code desktop
+  if (req.method === 'POST' && req.url === '/api/desktop-event') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const body = await readBody(req);
+      const { role, content } = JSON.parse(body.toString());
+      if (!content) return jsonRes(res, 400, { error: 'content required' });
+      const msgUuid = crypto.randomUUID();
+      const now = Date.now();
+      db.insertMessage({
+        uuid: msgUuid,
+        channel: 'desktop',
+        role: role === 'user' ? 'user' : 'assistant',
+        content: String(content),
+        chat_id: null,
+        session_uuid: session.loadSession(),
+        file_path: null,
+      });
+      ws.broadcast({ type: 'message', role: role || 'assistant', content: String(content), uuid: msgUuid, channel: 'desktop', created_at: now });
+      return jsonRes(res, 200, { ok: true, uuid: msgUuid });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // PUT /api/messages/:uuid/star  { starred: true|false }
+  if (req.method === 'PUT' && /^\/api\/messages\/[^/]+\/star$/.test(req.url)) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const msgUuid = req.url.split('/')[3];
+      const body = await readBody(req);
+      const { starred } = JSON.parse(body.toString());
+      db.starMessage(msgUuid, !!starred);
+      return jsonRes(res, 200, { ok: true });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
   // POST /transcribe  (raw audio body, query: ?filename=audio.oga)
   if (req.method === 'POST' && req.url.startsWith('/transcribe')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
     try {
       const audioBuffer = await readBody(req);
       const filename = new URL(req.url, 'http://x').searchParams.get('filename') || 'audio.oga';
@@ -457,13 +764,254 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── FILE HUB ENDPOINTS ─────────────────────────────────────
+
+  // GET /api/files?dir=inbox
+  if (req.method === 'GET' && req.url.startsWith('/api/files') && !req.url.startsWith('/api/files/')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const params = new URL(req.url, 'http://x').searchParams;
+      const dir = params.get('dir') || '';
+      const list = files.listDir(dir);
+      return jsonRes(res, 200, list);
+    } catch (e) {
+      return jsonRes(res, e.code === 'path_traversal' ? 400 : 500, { error: e.message });
+    }
+  }
+
+  // GET /api/files/content?path=...  — texto plano para preview
+  if (req.method === 'GET' && req.url.startsWith('/api/files/content')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const p = new URL(req.url, 'http://x').searchParams.get('path') || '';
+      const content = files.readFile(p);
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.end(content);
+    } catch (e) {
+      return jsonRes(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // GET /api/files/download?path=...  — descarga con Content-Disposition
+  if (req.method === 'GET' && req.url.startsWith('/api/files/download')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const p = new URL(req.url, 'http://x').searchParams.get('path') || '';
+      const fullPath = files.safePath(p);
+      const stat = require('fs').statSync(fullPath);
+      const mime = files.mimeType(fullPath);
+      const name = require('path').basename(fullPath);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': stat.size,
+        'Content-Disposition': `attachment; filename="${name}"`,
+        'Access-Control-Allow-Origin': '*',
+      });
+      require('fs').createReadStream(fullPath).pipe(res);
+    } catch (e) {
+      return jsonRes(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // GET /api/files/inline?path=...  — preview inline (imágenes, PDF)
+  if (req.method === 'GET' && req.url.startsWith('/api/files/inline')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const p = new URL(req.url, 'http://x').searchParams.get('path') || '';
+      const fullPath = files.safePath(p);
+      const stat = require('fs').statSync(fullPath);
+      const mime = files.mimeType(fullPath);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': stat.size,
+        'Access-Control-Allow-Origin': '*',
+      });
+      require('fs').createReadStream(fullPath).pipe(res);
+    } catch (e) {
+      return jsonRes(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // GET /api/files/share?path=...  — genera token temporal
+  if (req.method === 'GET' && req.url.startsWith('/api/files/share')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const p = new URL(req.url, 'http://x').searchParams.get('path') || '';
+      const token = files.createShareToken(p);
+      return jsonRes(res, 200, { token, url: `/api/files/public/${token}` });
+    } catch (e) {
+      return jsonRes(res, 400, { error: e.message });
+    }
+  }
+
+  // GET /api/files/public/:token  — acceso sin auth a archivo compartido
+  if (req.method === 'GET' && req.url.startsWith('/api/files/public/')) {
+    const token = req.url.split('/')[4];
+    const fullPath = files.resolveShareToken(token);
+    if (!fullPath) return jsonRes(res, 404, { error: 'token_expired_or_invalid' });
+    try {
+      const stat = require('fs').statSync(fullPath);
+      const mime = files.mimeType(fullPath);
+      const name = require('path').basename(fullPath);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': stat.size,
+        'Content-Disposition': `inline; filename="${name}"`,
+        'Access-Control-Allow-Origin': '*',
+      });
+      require('fs').createReadStream(fullPath).pipe(res);
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // POST /api/files/move  { from, to }
+  if (req.method === 'POST' && req.url === '/api/files/move') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const body = await readBody(req);
+      const { from, to } = JSON.parse(body.toString());
+      const newPath = files.moveFile(from, to);
+      return jsonRes(res, 200, { ok: true, path: newPath });
+    } catch (e) {
+      return jsonRes(res, e.code === 'path_traversal' ? 400 : 500, { error: e.message });
+    }
+  }
+
+  // POST /api/files/rename  { path, name }
+  if (req.method === 'POST' && req.url === '/api/files/rename') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const body = await readBody(req);
+      const { path: p, name } = JSON.parse(body.toString());
+      const newPath = files.renameFile(p, name);
+      return jsonRes(res, 200, { ok: true, path: newPath });
+    } catch (e) {
+      return jsonRes(res, e.code === 'path_traversal' ? 400 : 500, { error: e.message });
+    }
+  }
+
+  // DELETE /api/files?path=...
+  if (req.method === 'DELETE' && req.url.startsWith('/api/files')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const p = new URL(req.url, 'http://x').searchParams.get('path') || '';
+      files.deleteFile(p);
+      return jsonRes(res, 200, { ok: true });
+    } catch (e) {
+      const clientErr = ['path_traversal', 'path_required', 'cannot_delete_root'].includes(e.code);
+      return jsonRes(res, clientErr ? 400 : 500, { error: e.message });
+    }
+  }
+
+  // POST /api/upload  — subir archivo (multipart/form-data o raw body)
+  if (req.method === 'POST' && req.url.startsWith('/api/upload')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const params = new URL(req.url, 'http://x').searchParams;
+      const transcribeOnly = params.get('transcribe_only') === '1';
+      const rawBody = await readBody(req);
+      const contentType = req.headers['content-type'] || '';
+
+      let fileBuffer, filename;
+
+      if (contentType.includes('multipart/form-data')) {
+        // Parseo básico de multipart: extraer primer archivo
+        const boundary = contentType.match(/boundary=([^\s;]+)/)?.[1];
+        if (!boundary) return jsonRes(res, 400, { error: 'no boundary' });
+        const raw = rawBody.toString('binary');
+        const parts = raw.split('--' + boundary);
+        let found = false;
+        for (const part of parts) {
+          const match = part.match(/Content-Disposition: form-data;[^\r\n]*name="file"[^\r\n]*(filename="([^"]+)")?/i);
+          if (match) {
+            const headerEnd = part.indexOf('\r\n\r\n');
+            if (headerEnd < 0) continue;
+            filename = match[2] || `upload-${Date.now()}.bin`;
+            const body = part.slice(headerEnd + 4, part.length - 2); // strip trailing \r\n
+            fileBuffer = Buffer.from(body, 'binary');
+            found = true;
+            break;
+          }
+        }
+        if (!found) return jsonRes(res, 400, { error: 'no file in multipart' });
+      } else {
+        // Raw body
+        filename = params.get('filename') || `upload-${Date.now()}.bin`;
+        fileBuffer = rawBody;
+      }
+
+      if (transcribeOnly) {
+        const text = await transcribeBuffer(fileBuffer, filename);
+        return jsonRes(res, 200, { text });
+      }
+
+      // Guardar en inbox
+      const inboxDir = require('path').join(files.WORK_DIR, 'inbox');
+      if (!fs.existsSync(inboxDir)) fs.mkdirSync(inboxDir, { recursive: true });
+      const ext = require('path').extname(filename) || '.bin';
+      const savedName = `pwa-${Date.now()}${ext}`;
+      const savedPath = require('path').join(inboxDir, savedName);
+      fs.writeFileSync(savedPath, fileBuffer);
+      const relPath = require('path').relative(files.WORK_DIR, savedPath);
+
+      return jsonRes(res, 200, { ok: true, path: relPath, filename: savedName, size: fileBuffer.length });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // ── SERVIR ARCHIVOS ESTÁTICOS DE LA PWA ──────────────────────
+
+  // Mapeo de rutas a archivos en public/
+  const PUBLIC_DIR = require('path').join(__dirname, 'public');
+
+  let staticPath = req.url.split('?')[0];
+  if (staticPath === '/') staticPath = '/index.html';
+  // Solo servir GET de archivos conocidos
+  if (req.method === 'GET') {
+    const fullStatic = require('path').join(PUBLIC_DIR, staticPath);
+    // Verificar que el path esté dentro de public/
+    if (fullStatic.startsWith(PUBLIC_DIR) && fs.existsSync(fullStatic) && require('fs').statSync(fullStatic).isFile()) {
+      const mime = files.mimeType(fullStatic);
+      const content = fs.readFileSync(fullStatic);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Cache-Control': staticPath === '/sw.js' ? 'no-cache' : 'public, max-age=3600',
+      });
+      res.end(content);
+      return;
+    }
+
+    // SPA fallback: servir index.html para rutas desconocidas (excepto /api/*)
+    if (!staticPath.startsWith('/api/') && !staticPath.startsWith('/ws')) {
+      const indexPath = require('path').join(PUBLIC_DIR, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(fs.readFileSync(indexPath));
+        return;
+      }
+    }
+  }
+
   jsonRes(res, 404, { error: 'Not found' });
 });
 
+// Iniciar WebSocket server
+ws.init(server);
+
 server.listen(API_PORT, '0.0.0.0', () => {
-  console.log('🚀 ClaudeClaw Bridge v5 iniciado');
+  const uuid = session.loadSession();
+  console.log('🚀 ClaudeClaw Bridge v3 iniciado');
   console.log(`   API:      http://0.0.0.0:${API_PORT}`);
   console.log(`   Provider: ${MINIMAX_URL}`);
   console.log(`   WorkDir:  ${WORK_DIR}`);
-  console.log('   Modo: stream-json + imágenes + archivos');
+  console.log(`   Session:  ${uuid || '(nueva)'}`);
+  console.log(`   Timeout:  ${TIMEOUT_MS / 1000}s`);
+  console.log(`   WS:       ws://0.0.0.0:${API_PORT}/ws`);
+  console.log('   Modo: stream-json + cola serializada + SQLite + WebSocket');
 });

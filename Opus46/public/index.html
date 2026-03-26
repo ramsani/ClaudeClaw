@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ClaudeClaw">
+  <meta name="theme-color" content="#0d1117">
+  <title>ClaudeClaw</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/style.css">
+  <!-- Markdown + Syntax highlighting -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body class="dark">
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-card">
+    <img src="/icons/mascot.png" alt="ClaudeClaw" class="login-mascot" onerror="this.style.display='none'">
+    <h1>ClaudeClaw</h1>
+    <p class="login-sub">Tu agente Claude, desde cualquier dispositivo</p>
+    <form id="login-form">
+      <input type="password" id="password-input" placeholder="Contraseña" autocomplete="current-password" required>
+      <button type="submit">Entrar</button>
+    </form>
+    <p id="login-error" class="error-msg hidden">Contraseña incorrecta</p>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app" class="hidden">
+
+  <!-- HEADER -->
+  <header id="header">
+    <div class="header-left">
+      <button id="files-toggle" class="icon-btn" title="Archivos" aria-label="Archivos">📁</button>
+      <img src="/icons/mascot.png" alt="" class="mascot-header" id="mascot-icon" onerror="this.style.display='none'">
+      <span class="app-title">ClaudeClaw</span>
+    </div>
+    <div class="header-right">
+      <span id="status-dot" class="status-dot offline" title="Desconectado"></span>
+      <button id="search-btn" class="icon-btn" title="Buscar">🔍</button>
+      <button id="theme-btn" class="icon-btn" title="Tema">🌙</button>
+      <button id="settings-btn" class="icon-btn" title="Ajustes">⚙️</button>
+    </div>
+  </header>
+
+  <!-- SEARCH BAR (oculto por defecto) -->
+  <div id="search-bar" class="hidden">
+    <input type="text" id="search-input" placeholder="Buscar en historial..." autocomplete="off">
+    <button id="search-close" class="icon-btn">✕</button>
+  </div>
+
+  <!-- LAYOUT PRINCIPAL -->
+  <div id="layout">
+
+    <!-- SIDEBAR FILES (desktop) / DRAWER (mobile) -->
+    <aside id="files-sidebar" class="hidden">
+      <div class="sidebar-header">
+        <span>📁 Archivos</span>
+        <button id="sidebar-close" class="icon-btn">✕</button>
+      </div>
+      <div class="folder-tabs">
+        <button class="folder-tab active" data-dir="">🏠 Todo</button>
+        <button class="folder-tab" data-dir="inbox">📥 inbox</button>
+        <button class="folder-tab" data-dir="activo">⚡ activo</button>
+        <button class="folder-tab" data-dir="archivo">🗄️ archivo</button>
+      </div>
+      <div id="files-list" class="files-list">
+        <div class="loading-msg">Cargando archivos...</div>
+      </div>
+    </aside>
+
+    <!-- CHAT AREA -->
+    <main id="chat-main">
+      <div id="chat" role="log" aria-live="polite"></div>
+
+      <!-- TYPING INDICATOR -->
+      <div id="typing-indicator" class="typing-indicator hidden">
+        <img src="/icons/mascot.png" alt="" class="mascot-typing" id="mascot-thinking" onerror="this.style.display='none'">
+        <span id="typing-text">Claude está pensando...</span>
+      </div>
+
+      <!-- INPUT BAR -->
+      <div id="input-bar">
+        <button id="attach-btn" class="icon-btn" title="Adjuntar archivo">📎</button>
+        <input type="file" id="file-input" style="display:none" multiple>
+        <div class="input-wrap">
+          <textarea id="message-input" placeholder="Escribe o dicta un mensaje..." rows="1" autocomplete="off"></textarea>
+          <div id="slash-popup" class="slash-popup hidden"></div>
+        </div>
+        <button id="mic-btn" class="icon-btn" title="Nota de voz">🎤</button>
+        <button id="send-btn" class="send-btn" title="Enviar (Ctrl+Enter)">➤</button>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- FILE PREVIEW MODAL -->
+<div id="preview-modal" class="modal hidden">
+  <div class="modal-backdrop" id="preview-backdrop"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <span id="preview-title"></span>
+      <div class="modal-actions">
+        <button id="preview-download" class="icon-btn" title="Descargar">⬇️</button>
+        <button id="preview-share" class="icon-btn" title="Compartir">🔗</button>
+        <button id="preview-close" class="icon-btn">✕</button>
+      </div>
+    </div>
+    <div id="preview-body" class="modal-body"></div>
+  </div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div id="settings-modal" class="modal hidden">
+  <div class="modal-backdrop" id="settings-backdrop"></div>
+  <div class="modal-content settings-content">
+    <div class="modal-header">
+      <span>⚙️ Ajustes</span>
+      <button id="settings-close" class="icon-btn">✕</button>
+    </div>
+    <div class="settings-body">
+      <div class="setting-row">
+        <span>Sonido al recibir respuesta</span>
+        <label class="toggle"><input type="checkbox" id="sound-toggle"><span class="slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <span>Sesión actual</span>
+        <code id="session-uuid-display">—</code>
+      </div>
+      <div class="setting-row">
+        <span>Cola</span>
+        <code id="queue-status-display">—</code>
+      </div>
+      <div class="setting-row">
+        <a href="#" id="export-chat-btn">⬇️ Exportar chat como Markdown</a>
+      </div>
+      <div class="setting-row">
+        <a href="#" id="starred-btn">⭐ Mensajes guardados</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container"></div>
+
+<!-- SCRIPTS -->
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script>Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';</script>
+<script src="/app.js"></script>
+</body>
+</html>

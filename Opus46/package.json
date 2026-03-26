@@ -1,0 +1,20 @@
+{
+  "name": "claudeclaw",
+  "version": "3.0.0",
+  "description": "ClaudeClaw Bridge v3 — PWA + persistent session + file hub",
+  "main": "bridge.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node bridge.js",
+    "dev": "node --watch bridge.js",
+    "test": "node test/test-bridge.js && node test/test-security.js && node test/test-resilience.js",
+    "test:bridge": "node test/test-bridge.js",
+    "test:security": "node test/test-security.js",
+    "test:resilience": "node test/test-resilience.js",
+    "test:integration": "node test/test-integration.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "ws": "^8.17.0"
+  }
+}
