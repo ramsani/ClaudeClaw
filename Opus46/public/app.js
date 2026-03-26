@@ -312,7 +312,26 @@ function showApp() {
   loadWorkspaces().then(() => loadHistory());
   loadFiles();
   setupStatusPoller();
-  document.getElementById('ws-new-btn')?.addEventListener('click', showAddWorkspaceModal);
+  document.getElementById('ws-new-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    showAddWorkspaceModal();
+  });
+  initCollapsiblePanels();
+}
+
+function initCollapsiblePanels() {
+  ['sessions', 'files'].forEach(id => {
+    const panel = document.getElementById('panel-' + id);
+    if (!panel) return;
+    if (localStorage.getItem('panel-collapsed-' + id) === '1') {
+      panel.classList.add('collapsed');
+    }
+    panel.querySelector('.panel-toggle')?.addEventListener('click', e => {
+      if (e.target.closest('.sidebar-panel-action')) return;
+      const collapsed = panel.classList.toggle('collapsed');
+      localStorage.setItem('panel-collapsed-' + id, collapsed ? '1' : '0');
+    });
+  });
 }
 
 // ── WEBSOCKET ─────────────────────────────────────────────────
