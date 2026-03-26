@@ -141,14 +141,18 @@ async function stateSet(key, value, userId = '') {
 
 // ── mensajes ────────────────────────────────────────────────
 async function insertMessage({ uuid, channel, role, content, chat_id, session_uuid, file_path, user_id, workspace_id }) {
-  await pool.query(
+  const result = await pool.query(
     `INSERT INTO novaclaw_messages
        (uuid, user_id, telegram_chat_id, channel, role, content, session_uuid, file_path, workspace_id, created_at)
      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     ON CONFLICT (uuid) DO NOTHING`,
+     ON CONFLICT (uuid) DO NOTHING
+     RETURNING uuid`,
     [uuid, user_id || null, chat_id || null, channel, role, content,
      session_uuid || null, file_path || null, workspace_id || 'myclaw', Date.now()]
   );
+  if (result.rows.length === 0) {
+    console.warn(`[db] insertMessage: uuid ${uuid} ya existía (ON CONFLICT DO NOTHING)`);
+  }
 }
 
 async function getHistory({ limit = 50, before = null, q = null, starred = false, user_id = null, workspace_id = null } = {}) {

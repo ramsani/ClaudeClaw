@@ -865,6 +865,23 @@ body.dark .icon-sun { display: block; }
 
 .ws-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Botón cerrar sesión — visible solo en hover del item */
+.ws-close-btn {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.workspace-item:hover .ws-close-btn { display: flex; align-items: center; }
+.ws-close-btn:hover { background: var(--danger); color: #fff; }
+
 /* Indicador de actividad en workspace no activo */
 .ws-busy-dot {
   width: 6px;

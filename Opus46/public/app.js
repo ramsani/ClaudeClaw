@@ -30,6 +30,7 @@ let audioChunks = [];
 let slashSelectedIdx = -1;
 let historyBeforeTs = null;
 let loadingHistory = false;
+let historyLoadId = 0;     // token para cancelar cargas viejas al cambiar workspace
 const renderedUuids = new Set();
 
 // ── WORKSPACES ────────────────────────────────────────────────
@@ -63,6 +64,13 @@ function setActiveWorkspace(id, isArchived = false) {
   activeWorkspaceId = id;
   localStorage.setItem('active_workspace', id);
   updateWorkspaceUI();
+  historyLoadId++;          // invalida cualquier carga en curso del workspace anterior
+  loadingHistory = false;   // desbloquea el flag por si quedó atascado
+  // Ocultar indicador de carga (mascota) si quedó visible del workspace anterior
+  if (typingEl) {
+    typingEl.classList.add('hidden');
+    if (typingEl.parentNode) typingEl.parentNode.removeChild(typingEl);
+  }
   chatEl.innerHTML = '';
   renderedUuids.clear();
   historyBeforeTs = null;
@@ -189,8 +197,20 @@ function buildWorkspaceItem(ws, isArchived) {
       ${preview}
     </span>
     ${ws.queue?.busy ? '<span class="ws-busy-dot"></span>' : ''}
+    ${ws.id !== 'myclaw' ? '<button class="ws-close-btn" title="Cerrar sesión">✕</button>' : ''}
   `;
   item.addEventListener('click', () => setActiveWorkspace(ws.id, isArchived));
+  // Botón cerrar (sin propagar el click al item)
+  const closeBtn = item.querySelector('.ws-close-btn');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`¿Cerrar la sesión "${ws.name}"? El historial de mensajes se conserva.`)) return;
+      await apiFetch(`/api/workspaces/${ws.id}`, { method: 'DELETE' });
+      if (activeWorkspaceId === ws.id) setActiveWorkspace('myclaw');
+      await loadWorkspaces();
+    });
+  }
   return item;
 }
 
@@ -518,14 +538,26 @@ function setStatus(s) {
 
 // ── HISTORIAL ─────────────────────────────────────────────────
 async function loadHistory(before = null, search = null) {
-  if (loadingHistory) return;
-  loadingHistory = true;
+  // Capturar token AHORA sin incrementarlo — solo setActiveWorkspace debe incrementarlo.
+  // Así las llamadas del buscador no cancelan cargas legítimas de cambio de workspace.
+  const myLoadId = historyLoadId;
+  const isInitial = !before && !search;
+
+  if (isInitial) {
+    if (loadingHistory) return;
+    loadingHistory = true;
+  }
   try {
-    let url = `/api/history?limit=40&workspace_id=${encodeURIComponent(activeWorkspaceId)}`;
+    const wsId = activeWorkspaceId; // capturar antes del await
+    let url = `/api/history?limit=40&workspace_id=${encodeURIComponent(wsId)}`;
     if (before) url += `&before=${before}`;
     if (search) url += `&q=${encodeURIComponent(search)}`;
     const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) return;
+
+    // Si el workspace cambió mientras esperábamos la respuesta, descartar
+    if (isInitial && myLoadId !== historyLoadId) return;
+
     const msgs = await res.json(); // llega en orden DESC (más nuevo primero)
 
     if (!before) {
@@ -533,25 +565,26 @@ async function loadHistory(before = null, search = null) {
       chatEl.innerHTML = '';
       renderedUuids.clear();
       if (msgs.length === 0) {
-        // Mostrar empty state
         const es = document.getElementById('empty-state');
         if (es) chatEl.appendChild(es);
       } else {
         msgs.slice().reverse().forEach(m => appendMessage(m, false));
       }
-      // historyBeforeTs = timestamp del más antiguo cargado (último en DESC = index final)
       historyBeforeTs = msgs.length > 0 ? msgs[msgs.length - 1].created_at : null;
       if (msgs.length > 0) scrollToBottom();
     } else {
       if (msgs.length === 0) {
-        historyBeforeTs = null; // no hay más historial
+        historyBeforeTs = null;
       } else {
-        msgs.forEach(m => appendMessage(m, true)); // prepend en orden DESC = resultado correcto
-        historyBeforeTs = msgs[msgs.length - 1].created_at; // más antiguo del batch
+        msgs.forEach(m => appendMessage(m, true));
+        historyBeforeTs = msgs[msgs.length - 1].created_at;
       }
     }
-  } catch {}
-  loadingHistory = false;
+  } catch (e) {
+    console.error('[history] error cargando historial:', e);
+  } finally {
+    if (isInitial) loadingHistory = false;
+  }
 }
 
 // ── RENDERIZAR MENSAJES ───────────────────────────────────────

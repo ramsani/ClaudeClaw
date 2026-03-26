@@ -575,26 +575,36 @@ async function route(message, chatId, channel = 'telegram', workspaceId = 'mycla
   const now = Date.now();
   const wsId = workspace.id;
   const currentSession = await session.loadSession(wsId);
-  db.insertMessage({
-    uuid: userUuid, channel, role: 'user', content: text,
-    chat_id: chatId ? String(chatId) : null,
-    session_uuid: currentSession, file_path: null,
-    workspace_id: wsId,
-  }).catch(e => console.error('[db] insertMessage user error:', e.message));
+  // Guardar mensaje usuario ANTES de broadcast — garantiza que esté en DB
+  // cuando el cliente cambie de workspace y llame loadHistory()
+  try {
+    await db.insertMessage({
+      uuid: userUuid, channel, role: 'user', content: text,
+      chat_id: chatId ? String(chatId) : null,
+      session_uuid: currentSession, file_path: null,
+      workspace_id: wsId,
+    });
+  } catch (e) {
+    console.error('[db] insertMessage user error:', e.message, { wsId, uuid: userUuid });
+  }
   ws.broadcast({ type: 'message', role: 'user', content: text, uuid: userUuid, channel, created_at: now, workspace_id: wsId });
 
   // Encolar en la cola del workspace específico
   const assistantUuid = crypto.randomUUID();
   const result = await workspace.queue.push(() => askClaude(text, chatId, channel, assistantUuid, workspace));
 
-  // Guardar respuesta del asistente en PostgreSQL + broadcast WS
+  // Guardar respuesta asistente ANTES de broadcast — mismo motivo que arriba
   const assistantNow = Date.now();
-  db.insertMessage({
-    uuid: assistantUuid, channel, role: 'assistant', content: result,
-    chat_id: chatId ? String(chatId) : null,
-    session_uuid: currentSession, file_path: null,
-    workspace_id: wsId,
-  }).catch(e => console.error('[db] insertMessage assistant error:', e.message));
+  try {
+    await db.insertMessage({
+      uuid: assistantUuid, channel, role: 'assistant', content: result,
+      chat_id: chatId ? String(chatId) : null,
+      session_uuid: currentSession, file_path: null,
+      workspace_id: wsId,
+    });
+  } catch (e) {
+    console.error('[db] insertMessage assistant error:', e.message, { wsId, uuid: assistantUuid });
+  }
   ws.broadcast({ type: 'message', role: 'assistant', content: result, uuid: assistantUuid, channel, created_at: assistantNow, workspace_id: wsId });
 
   return result;
