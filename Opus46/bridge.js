@@ -150,13 +150,13 @@ const workspaces = {
     }));
   },
 
-  async add({ id, name, path: wsPath, color, description }) {
+  async add({ id, name, path: wsPath, color, description, user_id = 'admin' }) {
     // Validar path — debe existir y estar bajo home
     const resolved = path.resolve(wsPath);
     if (!resolved.startsWith(os.homedir())) throw Object.assign(new Error('path must be under home dir'), { code: 'invalid_path' });
     if (!fs.existsSync(resolved)) throw Object.assign(new Error('path does not exist'), { code: 'invalid_path' });
     const safeId = id.replace(/[^a-z0-9_-]/gi, '-').toLowerCase().slice(0, 40);
-    const ws = { id: safeId, name, path: resolved, color: color || '#007AFF', description: description || '', sort_order: this._map.size };
+    const ws = { id: safeId, name, path: resolved, color: color || '#007AFF', description: description || '', sort_order: this._map.size, user_id };
     await db.upsertWorkspace(ws);
     this._map.set(safeId, { ...ws, queue: new MessageQueue() });
     // Crear carpeta reports/ en MyClaw si no existe
@@ -653,14 +653,19 @@ const server = http.createServer(async (req, res) => {
   // GET /api/workspaces
   if (req.method === 'GET' && req.url === '/api/workspaces') {
     if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
-    return jsonRes(res, 200, workspaces.all());
+    const userId = auth.getSessionUser(req) || 'admin';
+    const all = workspaces.all();
+    // Filtrar por usuario: admin ve todos, otros solo los suyos
+    const filtered = userId === 'admin' ? all : all.filter(ws => ws.user_id === userId || ws.user_id === 'admin');
+    return jsonRes(res, 200, filtered);
   }
 
   // GET /api/workspaces/archived
   if (req.method === 'GET' && req.url === '/api/workspaces/archived') {
     if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
     try {
-      const archived = await db.getArchivedWorkspaces();
+      const userId = auth.getSessionUser(req) || 'admin';
+      const archived = await db.getArchivedWorkspaces(userId === 'admin' ? null : userId);
       return jsonRes(res, 200, archived);
     } catch (e) {
       return jsonRes(res, 500, { error: e.message });
@@ -674,7 +679,8 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const data = JSON.parse(body.toString());
       if (!data.id || !data.name || !data.path) return jsonRes(res, 400, { error: 'id, name y path son requeridos' });
-      const ws = await workspaces.add(data);
+      const userId = auth.getSessionUser(req) || 'admin';
+      const ws = await workspaces.add({ ...data, user_id: userId });
       return jsonRes(res, 201, { ok: true, workspace: ws });
     } catch (e) {
       return jsonRes(res, e.code === 'invalid_path' ? 400 : 500, { error: e.message });
@@ -722,7 +728,10 @@ const server = http.createServer(async (req, res) => {
       const q           = params.get('q') || null;
       const starred     = params.get('starred') === '1';
       const workspace_id = params.get('workspace_id') || null;
-      const messages = await db.getHistory({ limit, before, q, starred, workspace_id });
+      const sessionUser = auth.getSessionUser(req);
+      // admin ve todo; usuarios normales ven solo sus mensajes
+      const filterUserId = (sessionUser && sessionUser !== 'admin') ? sessionUser : null;
+      const messages = await db.getHistory({ limit, before, q, starred, workspace_id, user_id: filterUserId });
       return jsonRes(res, 200, messages);
     } catch (e) {
       return jsonRes(res, 500, { error: e.message });
@@ -1011,6 +1020,37 @@ const server = http.createServer(async (req, res) => {
       return jsonRes(res, 200, { path: targetPath, dirs });
     } catch (e) {
       return jsonRes(res, 400, { error: e.code || e.message });
+    }
+  }
+
+  // ── ADMIN: gestión de usuarios ─────────────────────────────
+
+  // GET /api/admin/users — listar usuarios (solo admin)
+  if (req.method === 'GET' && req.url === '/api/admin/users') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    const callerUserId = auth.getSessionUser(req) || 'admin';
+    if (callerUserId !== 'admin') return jsonRes(res, 403, { error: 'forbidden' });
+    try {
+      const users = await db.listUsers();
+      return jsonRes(res, 200, users);
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // POST /api/admin/users — crear/actualizar usuario (solo admin)
+  if (req.method === 'POST' && req.url === '/api/admin/users') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    const callerUserId = auth.getSessionUser(req) || 'admin';
+    if (callerUserId !== 'admin') return jsonRes(res, 403, { error: 'forbidden' });
+    try {
+      const body = await readBody(req);
+      const { userId, password, displayName, telegramChatId } = JSON.parse(body.toString());
+      if (!userId || !password) return jsonRes(res, 400, { error: 'userId y password son requeridos' });
+      await db.createUser({ userId, password, displayName, telegramChatId });
+      return jsonRes(res, 201, { ok: true, userId });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
     }
   }
 

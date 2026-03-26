@@ -61,6 +61,12 @@ async function init() {
         ADD COLUMN IF NOT EXISTS novaclaw_active BOOLEAN DEFAULT FALSE;
     `);
 
+    // user_id por workspace (aislamiento multi-usuario)
+    await client.query(`
+      ALTER TABLE novaclaw_workspaces
+        ADD COLUMN IF NOT EXISTS user_id VARCHAR(80) DEFAULT 'admin';
+    `);
+
     // Tabla de workspaces
     await client.query(`
       CREATE TABLE IF NOT EXISTS novaclaw_workspaces (
@@ -189,6 +195,41 @@ async function setUserPassword(userId, password) {
   );
 }
 
+async function createUser({ userId, password, displayName = null, telegramChatId = null }) {
+  const hash = await bcrypt.hash(password, 10);
+  // Intenta con first_name; si la columna no existe cae en el catch
+  try {
+    await pool.query(
+      `INSERT INTO users_registry (user_id, first_name, active, novaclaw_active, password_hash, telegram_chat_id)
+       VALUES ($1, $2, TRUE, TRUE, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE
+         SET first_name = EXCLUDED.first_name,
+             novaclaw_active = TRUE,
+             password_hash = EXCLUDED.password_hash`,
+      [userId, displayName || userId, hash, telegramChatId]
+    );
+  } catch {
+    await pool.query(
+      `INSERT INTO users_registry (user_id, active, novaclaw_active, password_hash)
+       VALUES ($1, TRUE, TRUE, $2)
+       ON CONFLICT (user_id) DO UPDATE
+         SET novaclaw_active = TRUE, password_hash = EXCLUDED.password_hash`,
+      [userId, hash]
+    );
+  }
+}
+
+async function listUsers() {
+  const { rows } = await pool.query(
+    `SELECT user_id, first_name, novaclaw_active, telegram_chat_id, active,
+            (password_hash IS NOT NULL) AS has_password
+     FROM users_registry
+     WHERE novaclaw_active = TRUE OR active = TRUE
+     ORDER BY user_id`
+  );
+  return rows;
+}
+
 // ── workspaces ──────────────────────────────────────────────
 async function getWorkspaces() {
   const { rows } = await pool.query(
@@ -197,20 +238,27 @@ async function getWorkspaces() {
   return rows;
 }
 
-async function getArchivedWorkspaces() {
+async function getArchivedWorkspaces(userId = null) {
+  if (userId) {
+    const { rows } = await pool.query(
+      `SELECT * FROM novaclaw_workspaces WHERE active=FALSE AND user_id=$1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    return rows;
+  }
   const { rows } = await pool.query(
     `SELECT * FROM novaclaw_workspaces WHERE active=FALSE ORDER BY created_at DESC`
   );
   return rows;
 }
 
-async function upsertWorkspace({ id, name, path: wsPath, color, description, sort_order }) {
+async function upsertWorkspace({ id, name, path: wsPath, color, description, sort_order, user_id = 'admin' }) {
   await pool.query(
-    `INSERT INTO novaclaw_workspaces(id, name, path, color, description, sort_order)
-     VALUES($1,$2,$3,$4,$5,$6)
+    `INSERT INTO novaclaw_workspaces(id, name, path, color, description, sort_order, user_id)
+     VALUES($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, path=EXCLUDED.path,
        color=EXCLUDED.color, description=EXCLUDED.description, sort_order=EXCLUDED.sort_order`,
-    [id, name, wsPath, color || '#007AFF', description || '', sort_order || 0]
+    [id, name, wsPath, color || '#007AFF', description || '', sort_order || 0, user_id]
   );
 }
 
@@ -287,7 +335,7 @@ module.exports = {
   pool, init,
   stateGet, stateSet,
   insertMessage, getHistory, starMessage, exportMessages,
-  getUserByTelegramChatId, getUserByUserId, verifyUserPassword, setUserPassword,
+  getUserByTelegramChatId, getUserByUserId, verifyUserPassword, setUserPassword, createUser, listUsers,
   getWorkspaces, getArchivedWorkspaces, upsertWorkspace, deleteWorkspace,
   getNotes, createNote, getActions, createAction, updateNote, updateAction,
 };
