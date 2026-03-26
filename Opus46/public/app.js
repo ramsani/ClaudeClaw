@@ -35,19 +35,52 @@ const renderedUuids = new Set();
 // ── WORKSPACES ────────────────────────────────────────────────
 let workspaceList = [];
 let activeWorkspaceId = localStorage.getItem('active_workspace') || 'myclaw';
+const scrollPositions = {};
+
+// ── INPUT HISTORY (↑↓ como terminal) ─────────────────────────
+const inputHistory = [];
+let inputHistoryIdx = -1;
+let inputDraftSaved = '';
+
+// ── TAB BADGE ─────────────────────────────────────────────────
+let unreadCount = 0;
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    unreadCount = 0;
+    document.title = 'NovaClaw';
+    if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
+  }
+});
 
 function getActiveWorkspace() {
   return workspaceList.find(w => w.id === activeWorkspaceId) || { id: 'myclaw', name: 'MyClaw', color: '#007AFF' };
 }
 
 function setActiveWorkspace(id, isArchived = false) {
+  // Guardar scroll del workspace actual antes de cambiar
+  if (activeWorkspaceId && chatEl) scrollPositions[activeWorkspaceId] = chatEl.scrollTop;
+
   activeWorkspaceId = id;
   localStorage.setItem('active_workspace', id);
   updateWorkspaceUI();
   chatEl.innerHTML = '';
   renderedUuids.clear();
   historyBeforeTs = null;
-  loadHistory();
+
+  // Actualizar chat header
+  const ws = workspaceList.find(w => w.id === id) || { name: 'MyClaw', color: '#007AFF' };
+  const dot = document.getElementById('active-ws-dot');
+  const nameEl = document.getElementById('active-ws-name');
+  if (dot) dot.style.background = ws.color || '#007AFF';
+  if (nameEl) nameEl.textContent = ws.name || 'MyClaw';
+
+  // Restaurar scroll tras cargar historial
+  loadHistory().then(() => {
+    setTimeout(() => {
+      const saved = scrollPositions[id];
+      chatEl.scrollTop = saved != null ? saved : chatEl.scrollHeight;
+    }, 80);
+  });
   // Modo lectura para archivados
   const inputArea = document.getElementById('input-area');
   const readonlyBanner = document.getElementById('readonly-banner');
@@ -191,8 +224,18 @@ function showAddWorkspaceModal() {
     btn.onclick = () => { colorEl.value = btn.dataset.color; };
   });
 
+  // Browse button
+  document.getElementById('ws-browse-btn').onclick = (e) => {
+    e.stopPropagation();
+    const currentVal = pathEl.value.trim() || null;
+    showDirPicker(currentVal);
+  };
+
   // Close handlers
-  const close = () => modal.classList.add('hidden');
+  const close = () => {
+    modal.classList.add('hidden');
+    document.getElementById('dir-picker')?.classList.add('hidden');
+  };
   document.getElementById('workspace-backdrop').onclick = close;
   document.getElementById('workspace-modal-close').onclick = close;
 
@@ -309,18 +352,42 @@ function showApp() {
   loginScreen.classList.add('hidden');
   app.classList.remove('hidden');
   connectWS();
-  loadWorkspaces().then(() => loadHistory());
+  loadWorkspaces().then(() => {
+    loadHistory();
+    // Inicializar chat header con workspace por defecto
+    const ws = workspaceList.find(w => w.id === activeWorkspaceId) || { name: 'MyClaw', color: '#007AFF' };
+    const dot = document.getElementById('active-ws-dot');
+    const nameEl = document.getElementById('active-ws-name');
+    if (dot) dot.style.background = ws.color || '#007AFF';
+    if (nameEl) nameEl.textContent = ws.name || 'MyClaw';
+  });
   loadFiles();
+  loadRecentNotes();
   setupStatusPoller();
   document.getElementById('ws-new-btn')?.addEventListener('click', e => {
     e.stopPropagation();
     showAddWorkspaceModal();
   });
+  document.getElementById('notes-refresh-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    loadRecentNotes();
+  });
+  document.getElementById('split-btn')?.addEventListener('click', toggleSplitView);
   initCollapsiblePanels();
+  // Sonido: leer estado guardado
+  soundEnabled = localStorage.getItem('sound_enabled') === '1';
+  const toggle = document.getElementById('sound-toggle');
+  if (toggle) toggle.checked = soundEnabled;
+  // Actualizar timestamps relativos cada 60s
+  setInterval(() => {
+    document.querySelectorAll('time.msg-time[datetime]').forEach(el => {
+      el.textContent = relativeTime(el.getAttribute('datetime'));
+    });
+  }, 60_000);
 }
 
 function initCollapsiblePanels() {
-  ['sessions', 'files'].forEach(id => {
+  ['sessions', 'files', 'notes'].forEach(id => {
     const panel = document.getElementById('panel-' + id);
     if (!panel) return;
     if (localStorage.getItem('panel-collapsed-' + id) === '1') {
@@ -377,7 +444,15 @@ function handleWSEvent(ev) {
     case 'message':
       appendMessage(ev);
       if (ev.role === 'user') scrollToBottom();
-      if (ev.role === 'assistant' && soundEnabled) playChime();
+      if (ev.role === 'assistant') {
+        if (soundEnabled) playChime();
+        // Tab badge cuando la ventana está oculta
+        if (document.hidden) {
+          unreadCount++;
+          document.title = `(${unreadCount}) NovaClaw`;
+          if ('setAppBadge' in navigator) navigator.setAppBadge(unreadCount).catch(() => {});
+        }
+      }
       break;
     case 'typing':
       if (ev.active) {
@@ -445,10 +520,16 @@ async function loadHistory(before = null, search = null) {
       // Carga inicial: invertir para tener ASC (más antiguo primero) y append normal
       chatEl.innerHTML = '';
       renderedUuids.clear();
-      msgs.slice().reverse().forEach(m => appendMessage(m, false));
+      if (msgs.length === 0) {
+        // Mostrar empty state
+        const es = document.getElementById('empty-state');
+        if (es) chatEl.appendChild(es);
+      } else {
+        msgs.slice().reverse().forEach(m => appendMessage(m, false));
+      }
       // historyBeforeTs = timestamp del más antiguo cargado (último en DESC = index final)
       historyBeforeTs = msgs.length > 0 ? msgs[msgs.length - 1].created_at : null;
-      scrollToBottom();
+      if (msgs.length > 0) scrollToBottom();
     } else {
       if (msgs.length === 0) {
         historyBeforeTs = null; // no hay más historial
@@ -506,8 +587,9 @@ function appendMessage(msg, prepend = false) {
   const meta = document.createElement('div');
   meta.className = 'bubble-meta';
   const tsDate = msg.created_at ? new Date(msg.created_at) : null;
-  const ts = tsDate && !isNaN(tsDate) ? tsDate.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '';
-  meta.innerHTML = `<span>${ts}</span>`;
+  const tsAbsolute = tsDate && !isNaN(tsDate) ? tsDate.toLocaleString('es-MX') : '';
+  const tsRel = msg.created_at ? relativeTime(msg.created_at) : '';
+  meta.innerHTML = `<time class="msg-time" datetime="${msg.created_at || ''}" title="${tsAbsolute}">${tsRel}</time>`;
   if (msg.channel && msg.channel !== 'pwa') {
     const badge = document.createElement('span');
     badge.className = 'channel-badge';
@@ -795,6 +877,7 @@ async function saveToNova(type, title, content) {
     if (!res.ok) throw new Error('error');
     const label = type === 'nota' ? 'Nota guardada en Nova' : 'Acción creada en Nova';
     showToast(label, 'success');
+    loadRecentNotes(); // refrescar panel sidebar
   } catch {
     showToast('Error guardando en Nova', 'error');
   }
@@ -822,6 +905,11 @@ async function sendMessage(text) {
 
   if (!text) inputEl.value = '';
   autoResizeTextarea();
+  // Guardar en historial de input
+  inputHistory.unshift(msg);
+  if (inputHistory.length > 50) inputHistory.pop();
+  inputHistoryIdx = -1;
+  inputDraftSaved = '';
   sendBtn.disabled = true;
   scrollToBottom(); // siempre ir al fondo al enviar
 
@@ -851,12 +939,31 @@ sendBtn.addEventListener('click', () => sendMessage());
 inputEl.addEventListener('keydown', e => {
   // Enter sin Shift → enviar; Shift+Enter → salto de línea
   if (e.key === 'Enter' && !e.shiftKey) {
-    // Si slash popup está abierto, Enter selecciona ítem (manejado abajo)
     if (!slashPopup.classList.contains('hidden')) {
       // handled below
     } else {
       e.preventDefault(); sendMessage(); return;
     }
+  }
+
+  // Historial de input con ↑↓ (solo cuando el input está vacío o navegando historial)
+  if (e.key === 'ArrowUp' && slashPopup.classList.contains('hidden') && !e.shiftKey) {
+    if (inputHistoryIdx === -1) inputDraftSaved = inputEl.value;
+    if (inputHistoryIdx < inputHistory.length - 1) {
+      inputHistoryIdx++;
+      inputEl.value = inputHistory[inputHistoryIdx];
+      autoResizeTextarea();
+      setTimeout(() => inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length), 0);
+      e.preventDefault();
+      return;
+    }
+  }
+  if (e.key === 'ArrowDown' && slashPopup.classList.contains('hidden') && inputHistoryIdx >= 0) {
+    inputHistoryIdx--;
+    inputEl.value = inputHistoryIdx === -1 ? inputDraftSaved : inputHistory[inputHistoryIdx];
+    autoResizeTextarea();
+    e.preventDefault();
+    return;
   }
 
   // Slash autocomplete navigation
@@ -1224,7 +1331,10 @@ async function updateSettingsPanel() {
   } catch {}
 }
 
-$('sound-toggle').addEventListener('change', e => { soundEnabled = e.target.checked; });
+$('sound-toggle').addEventListener('change', e => {
+  soundEnabled = e.target.checked;
+  localStorage.setItem('sound_enabled', soundEnabled ? '1' : '0');
+});
 
 $('export-chat-btn').addEventListener('click', async e => {
   e.preventDefault();
@@ -1359,16 +1469,35 @@ document.addEventListener('click', e => {
 
 // ── KEYBOARD SHORTCUTS ────────────────────────────────────────
 document.addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+  const mod = e.ctrlKey || e.metaKey;
+  const inInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+
+  // Cmd+K — búsqueda (siempre)
+  if (mod && e.key === 'k') {
     e.preventDefault();
-    searchBar.classList.remove('hidden');
-    searchInput.focus();
+    searchBar.classList.toggle('hidden');
+    if (!searchBar.classList.contains('hidden')) searchInput.focus();
+    return;
   }
+  // Cmd+N — nueva sesión (no en inputs)
+  if (mod && e.key === 'n' && !inInput) {
+    e.preventDefault();
+    showAddWorkspaceModal();
+    return;
+  }
+  // Cmd+1..9 — saltar a workspace N
+  if (mod && !inInput && e.key >= '1' && e.key <= '9') {
+    const wsTarget = workspaceList[parseInt(e.key) - 1];
+    if (wsTarget) { e.preventDefault(); setActiveWorkspace(wsTarget.id, false); }
+  }
+  // Escape — cerrar modales y overlays
   if (e.key === 'Escape') {
     previewModal.classList.add('hidden');
     settingsModal.classList.add('hidden');
     searchBar.classList.add('hidden');
     slashPopup.classList.add('hidden');
+    document.getElementById('workspace-modal')?.classList.add('hidden');
+    document.getElementById('dir-picker')?.classList.add('hidden');
   }
 });
 
@@ -1430,6 +1559,172 @@ if (mobileTabs) {
       filesSidebar.classList.toggle('mobile-shown', panel === 'files');
     });
   });
+}
+
+// ── RELATIVE TIME ─────────────────────────────────────────────
+function relativeTime(ts) {
+  if (!ts) return '';
+  const diff = (Date.now() - new Date(ts)) / 1000;
+  if (diff < 60) return 'ahora';
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `hace ${Math.floor(diff / 3600)} h`;
+  if (diff < 604800) return `hace ${Math.floor(diff / 86400)} d`;
+  return new Date(ts).toLocaleDateString('es', { day: 'numeric', month: 'short' });
+}
+
+// ── NOTAS Y ACCIONES RECIENTES ────────────────────────────────
+async function loadRecentNotes() {
+  const list = document.getElementById('notes-list');
+  if (!list) return;
+  list.innerHTML = '<div class="loading-msg">Cargando…</div>';
+  try {
+    const res = await fetch('/api/nova/recent?limit=10', { headers: authHeaders() });
+    if (!res.ok) { list.innerHTML = '<div class="loading-msg">Error al cargar</div>'; return; }
+    const items = await res.json();
+    list.innerHTML = '';
+    if (items.length === 0) {
+      list.innerHTML = '<div class="loading-msg">Sin notas recientes</div>';
+      return;
+    }
+    items.forEach(item => {
+      const el = document.createElement('div');
+      el.className = 'note-item';
+      el.innerHTML = `
+        <div class="note-item-header">
+          <span class="note-item-badge ${item.type === 'note' ? 'badge-note' : 'badge-action'}">${item.type === 'note' ? 'Nota' : 'Acción'}</span>
+          <span class="note-item-time">${relativeTime(item.created_at)}</span>
+        </div>
+        <div class="note-item-title">${escapeHtml(item.title || '(sin título)')}</div>
+        <div class="note-item-editor hidden">
+          <input class="note-edit-title" type="text" value="${escapeHtml(item.title || '')}">
+          <textarea class="note-edit-content">${escapeHtml(item.content || '')}</textarea>
+          <div class="note-edit-actions">
+            <button class="note-save-btn">Guardar</button>
+            <button class="note-cancel-btn">Cancelar</button>
+          </div>
+        </div>`;
+      el.querySelector('.note-item-title').addEventListener('click', () => {
+        el.querySelector('.note-item-editor').classList.toggle('hidden');
+        el.querySelector('.note-edit-title').focus();
+      });
+      el.querySelector('.note-save-btn').addEventListener('click', async () => {
+        const title = el.querySelector('.note-edit-title').value;
+        const content = el.querySelector('.note-edit-content').value;
+        const r = await fetch(`/api/nova/${item.type}/${item.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ title, content }),
+        });
+        if (r.ok) {
+          el.querySelector('.note-item-title').textContent = title;
+          el.querySelector('.note-item-editor').classList.add('hidden');
+          showToast('Guardado', 'success');
+        } else showToast('Error al guardar', 'error');
+      });
+      el.querySelector('.note-cancel-btn').addEventListener('click', () => {
+        el.querySelector('.note-item-editor').classList.add('hidden');
+      });
+      list.appendChild(el);
+    });
+  } catch { list.innerHTML = '<div class="loading-msg">Error de conexión</div>'; }
+}
+
+// ── FILE PICKER (dir browser) ─────────────────────────────────
+async function showDirPicker(startPath) {
+  const picker = document.getElementById('dir-picker');
+  const breadcrumb = document.getElementById('dir-picker-breadcrumb');
+  const listEl = document.getElementById('dir-picker-list');
+  const loading = document.getElementById('dir-picker-loading');
+  const errEl = document.getElementById('dir-picker-error');
+  const pathInput = document.getElementById('ws-path');
+  if (!picker) return;
+
+  picker.classList.remove('hidden');
+
+  async function navigate(p) {
+    loading.classList.remove('hidden');
+    listEl.innerHTML = '';
+    errEl.classList.add('hidden');
+    try {
+      const res = await fetch(`/api/files/ls?path=${encodeURIComponent(p)}`, { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'error');
+
+      // Breadcrumb
+      const parts = data.path.split('/').filter(Boolean);
+      breadcrumb.innerHTML = parts.map((part, i) => {
+        const fp = '/' + parts.slice(0, i + 1).join('/');
+        return `<span class="dir-crumb" data-path="${escapeHtml(fp)}">${escapeHtml(part)}</span>`;
+      }).join('<span class="dir-sep">/</span>');
+      breadcrumb.querySelectorAll('.dir-crumb').forEach(c =>
+        c.addEventListener('click', () => navigate(c.dataset.path))
+      );
+
+      // Directorio actual — botón de seleccionar
+      const curBtn = document.createElement('button');
+      curBtn.className = 'dir-picker-select';
+      const shortPath = data.path.split('/').slice(-2).join('/');
+      curBtn.textContent = `✓ Usar …/${shortPath}`;
+      curBtn.onclick = () => { pathInput.value = data.path; picker.classList.add('hidden'); };
+      listEl.appendChild(curBtn);
+
+      if (data.dirs.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'dir-picker-empty';
+        empty.textContent = 'Sin subdirectorios';
+        listEl.appendChild(empty);
+      } else {
+        data.dirs.forEach(dir => {
+          const item = document.createElement('div');
+          item.className = 'dir-picker-item';
+          item.textContent = '📁 ' + dir.name;
+          item.addEventListener('click', () => navigate(dir.path));
+          listEl.appendChild(item);
+        });
+      }
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+    }
+    loading.classList.add('hidden');
+  }
+
+  const initialPath = startPath || (os?.homedir?.() ?? '/Users');
+  await navigate(initialPath.startsWith('/') ? initialPath : '/Users');
+
+  // Cerrar al click fuera
+  const outsideHandler = (e) => {
+    if (!picker.contains(e.target) && e.target.id !== 'ws-browse-btn') {
+      picker.classList.add('hidden');
+      document.removeEventListener('mousedown', outsideHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', outsideHandler), 0);
+}
+
+// ── SPLIT VIEW ────────────────────────────────────────────────
+let splitActive = false;
+function toggleSplitView() {
+  splitActive = !splitActive;
+  const views = document.getElementById('workspace-views');
+  const chat2 = document.getElementById('chat-main-2');
+  if (views && chat2) {
+    views.classList.toggle('split-mode', splitActive);
+    chat2.classList.toggle('hidden', !splitActive);
+    if (splitActive) {
+      const sel = document.getElementById('split-ws-selector');
+      if (sel) {
+        sel.innerHTML = workspaceList
+          .filter(w => w.id !== activeWorkspaceId)
+          .map(w => `<option value="${escapeHtml(w.id)}">${escapeHtml(w.name)}</option>`)
+          .join('');
+      }
+    }
+  } else {
+    // Split view HTML not yet in DOM — show toast
+    showToast('Vista dividida disponible próximamente', 'info');
+    splitActive = false;
+  }
 }
 
 // ── SERVICE WORKER ────────────────────────────────────────────

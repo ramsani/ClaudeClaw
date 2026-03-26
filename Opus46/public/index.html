@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="/style.css?v=11">
+  <link rel="stylesheet" href="/style.css?v=12">
 </head>
 <body>
 
@@ -151,6 +151,23 @@
         </div><!-- /panel-body-files -->
       </div><!-- /panel-files -->
 
+      <!-- Notes & Actions panel -->
+      <div class="sidebar-panel" id="panel-notes">
+        <div class="sidebar-panel-header panel-toggle" data-panel="notes">
+          <span class="sidebar-panel-title">
+            <svg class="panel-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Notas y Acciones
+          </span>
+          <button id="notes-refresh-btn" class="sidebar-panel-action" title="Actualizar">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+        </div>
+        <div class="panel-body" id="panel-body-notes">
+          <div id="notes-list" class="notes-list"></div>
+        </div>
+      </div>
+
       <!-- Sidebar footer -->
       <div class="sidebar-footer">
         <button id="theme-btn" class="sidebar-icon-btn" title="Cambiar tema">
@@ -168,6 +185,15 @@
 
     <!-- CHAT AREA -->
     <main id="chat-main">
+      <!-- Chat header — workspace activo -->
+      <div id="chat-header" class="chat-header">
+        <span id="active-ws-dot" class="chat-ws-dot"></span>
+        <span id="active-ws-name" class="chat-ws-name">MyClaw</span>
+        <div class="chat-header-spacer"></div>
+        <button id="split-btn" class="chat-header-action" title="Vista dividida">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="18" rx="1"/><rect x="13" y="3" width="8" height="18" rx="1"/></svg>
+        </button>
+      </div>
       <button id="sidebar-expand-btn" class="sidebar-expand-btn hidden" title="Abrir panel">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
@@ -297,8 +323,18 @@
       </label>
       <label class="ws-field">
         <span>Carpeta del proyecto</span>
-        <input type="text" id="ws-path" placeholder="/Users/papa/0Proyectos/Nova" autocomplete="off" spellcheck="false">
-        <span class="ws-field-hint">Path completo en el servidor</span>
+        <div class="ws-path-row">
+          <input type="text" id="ws-path" placeholder="/Users/papa/0Proyectos/Nova" autocomplete="off" spellcheck="false">
+          <button type="button" id="ws-browse-btn" class="ws-browse-btn" title="Explorar carpetas">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+          </button>
+        </div>
+        <div id="dir-picker" class="dir-picker hidden">
+          <div id="dir-picker-breadcrumb" class="dir-picker-breadcrumb"></div>
+          <div id="dir-picker-list" class="dir-picker-list"></div>
+          <div id="dir-picker-loading" class="dir-picker-loading hidden">Cargando…</div>
+          <div id="dir-picker-error" class="dir-picker-error hidden"></div>
+        </div>
       </label>
       <label class="ws-field">
         <span>Color</span>
@@ -330,6 +366,6 @@
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 <script>Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';</script>
-<script src="/app.js?v=11"></script>
+<script src="/app.js?v=12"></script>
 </body>
 </html>

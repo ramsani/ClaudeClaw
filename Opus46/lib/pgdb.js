@@ -265,11 +265,29 @@ async function createAction({ user_id, telegram_chat_id, title, content, action_
   return rows[0];
 }
 
+async function updateNote({ id, title, content }) {
+  const now = new Date().toISOString();
+  const { rows } = await pool.query(
+    `UPDATE notes SET title=$1, content=$2, updated_at=$3 WHERE id=$4 RETURNING *`,
+    [title || '', content || '', now, id]
+  );
+  return rows[0] || null;
+}
+
+async function updateAction({ id, title, content }) {
+  const now = new Date().toISOString();
+  const { rows } = await pool.query(
+    `UPDATE actions SET title=$1, content=$2, updated_at=$3 WHERE id=$4 RETURNING *`,
+    [title || '', content || '', now, id]
+  );
+  return rows[0] || null;
+}
+
 module.exports = {
   pool, init,
   stateGet, stateSet,
   insertMessage, getHistory, starMessage, exportMessages,
   getUserByTelegramChatId, getUserByUserId, verifyUserPassword, setUserPassword,
   getWorkspaces, getArchivedWorkspaces, upsertWorkspace, deleteWorkspace,
-  getNotes, createNote, getActions, createAction,
+  getNotes, createNote, getActions, createAction, updateNote, updateAction,
 };

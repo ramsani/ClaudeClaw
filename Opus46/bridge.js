@@ -953,6 +953,67 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // GET /api/nova/recent?limit=10  — últimas notas + acciones combinadas
+  if (req.method === 'GET' && req.url.startsWith('/api/nova/recent')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const userId = auth.getSessionUser(req);
+      const qLimit = Math.min(parseInt(new URL(req.url, 'http://x').searchParams.get('limit') || '10', 10), 50);
+      const [notes, actions] = await Promise.all([
+        db.getNotes({ user_id: userId || null, limit: qLimit }),
+        db.getActions({ user_id: userId || null, limit: qLimit }),
+      ]);
+      const combined = [
+        ...notes.map(n => ({ ...n, type: 'note' })),
+        ...actions.map(a => ({ ...a, type: 'action' })),
+      ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, qLimit);
+      return jsonRes(res, 200, combined);
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // PATCH /api/nova/note/:id  { title, content }
+  // PATCH /api/nova/action/:id  { title, content }
+  const novaEditMatch = req.url.match(/^\/api\/nova\/(note|action)\/(\d+)$/);
+  if (req.method === 'PATCH' && novaEditMatch) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const [, type, id] = novaEditMatch;
+      const body = await readBody(req);
+      const { title, content } = JSON.parse(body.toString());
+      const updated = type === 'note'
+        ? await db.updateNote({ id: parseInt(id, 10), title, content })
+        : await db.updateAction({ id: parseInt(id, 10), title, content });
+      if (!updated) return jsonRes(res, 404, { error: 'not_found' });
+      return jsonRes(res, 200, { ok: true, updated });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // GET /api/files/ls?path=/Users/papa  — lista subdirectorios (para file picker)
+  if (req.method === 'GET' && req.url.startsWith('/api/files/ls')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const rawPath = new URL(req.url, 'http://x').searchParams.get('path') || os.homedir();
+      const targetPath = rawPath.startsWith('~')
+        ? path.join(os.homedir(), rawPath.slice(1))
+        : rawPath;
+      if (!targetPath.startsWith(os.homedir())) {
+        return jsonRes(res, 400, { error: 'path_outside_home' });
+      }
+      const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+      const dirs = entries
+        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+        .map(e => ({ name: e.name, path: path.join(targetPath, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return jsonRes(res, 200, { path: targetPath, dirs });
+    } catch (e) {
+      return jsonRes(res, 400, { error: e.code || e.message });
+    }
+  }
+
   // POST /transcribe  (raw audio body, query: ?filename=audio.oga)
   if (req.method === 'POST' && req.url.startsWith('/transcribe')) {
     if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
