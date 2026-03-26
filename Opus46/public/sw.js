@@ -1,5 +1,5 @@
 // ClaudeClaw Service Worker — app shell cache + network-first para /api/*
-const CACHE_NAME = 'claudeclaw-v12';
+const CACHE_NAME = 'claudeclaw-v13';
 const SHELL = ['/', '/index.html', '/app.js', '/style.css', '/manifest.json'];
 
 self.addEventListener('install', e => {

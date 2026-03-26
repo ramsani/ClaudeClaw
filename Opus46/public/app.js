@@ -73,6 +73,14 @@ function setActiveWorkspace(id, isArchived = false) {
   const nameEl = document.getElementById('active-ws-name');
   if (dot) dot.style.background = ws.color || '#007AFF';
   if (nameEl) nameEl.textContent = ws.name || 'MyClaw';
+  // Mobile header indicator
+  const mobileDot = document.getElementById('mobile-ws-dot');
+  const mobileName = document.getElementById('mobile-ws-name');
+  if (mobileDot) mobileDot.style.background = ws.color || '#007AFF';
+  if (mobileName) mobileName.textContent = ws.name || 'MyClaw';
+  // Collapsed expand button dot
+  const expandDot = document.getElementById('expand-ws-dot');
+  if (expandDot) expandDot.style.background = ws.color || '#007AFF';
 
   // Restaurar scroll tras cargar historial
   loadHistory().then(() => {
@@ -1282,7 +1290,7 @@ document.querySelectorAll('.folder-tab').forEach(btn => {
 
 // ── HEADER BUTTONS ───────────────────────────────────────────
 $('files-toggle').addEventListener('click', () => {
-  filesSidebar.classList.toggle('hidden');
+  filesSidebar.classList.toggle('mobile-shown');
 });
 $('sidebar-close').addEventListener('click', () => {
   filesSidebar.classList.add('hidden');
@@ -1555,8 +1563,25 @@ if (mobileTabs) {
       btn.classList.add('active');
       const panel = btn.dataset.panel;
       const chatMain = $('chat-main');
-      chatMain.classList.toggle('mobile-hidden', panel !== 'chat');
-      filesSidebar.classList.toggle('mobile-shown', panel === 'files');
+
+      if (panel === 'chat') {
+        chatMain.classList.remove('mobile-hidden');
+        filesSidebar.classList.remove('mobile-shown');
+      } else {
+        chatMain.classList.add('mobile-hidden');
+        filesSidebar.classList.add('mobile-shown');
+        // Scroll to the relevant panel within the sidebar
+        const targetPanel = document.getElementById(
+          panel === 'sessions' ? 'panel-sessions' :
+          panel === 'files'    ? 'panel-files'    :
+          panel === 'notes'    ? 'panel-notes'    : 'panel-sessions'
+        );
+        if (targetPanel) {
+          // Ensure the panel is expanded
+          targetPanel.classList.remove('collapsed');
+          setTimeout(() => targetPanel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+        }
+      }
     });
   });
 }
