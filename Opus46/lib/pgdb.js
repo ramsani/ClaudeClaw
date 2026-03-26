@@ -162,7 +162,7 @@ async function getHistory({ limit = 50, before = null, q = null, starred = false
   let i = 1;
 
   if (workspace_id) { conditions.push(`workspace_id = $${i++}`);  params.push(workspace_id); }
-  if (user_id)      { conditions.push(`(user_id = $${i++} OR user_id IS NULL)`); params.push(user_id); }
+  if (user_id)      { conditions.push(`user_id = $${i++}`);       params.push(user_id); }
   if (before != null) { conditions.push(`created_at < $${i++}`);  params.push(before); }
   if (q)            { conditions.push(`content ILIKE $${i++}`);   params.push(`%${q}%`); }
   if (starred)      { conditions.push(`starred = TRUE`); }
