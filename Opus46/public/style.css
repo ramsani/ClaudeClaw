@@ -346,6 +346,61 @@ body.dark .icon-sun { display: block; }
   gap: 8px;
 }
 
+/* ── SELECTION TOOLBAR ───────────────────────────────── */
+.selection-toolbar {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.1);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: toolbar-pop 0.12s cubic-bezier(0.34,1.56,0.64,1);
+  pointer-events: all;
+}
+.selection-toolbar.hidden { display: none; }
+
+@keyframes toolbar-pop {
+  from { opacity: 0; transform: scale(0.88) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.selection-toolbar button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s;
+}
+.selection-toolbar button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.selection-toolbar button + button {
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  padding-left: 9px;
+}
+.selection-toolbar button:last-child {
+  border-radius: 0 7px 7px 0;
+}
+.selection-toolbar button:first-child {
+  border-radius: 7px 0 0 7px;
+}
+
 /* ── SIDEBAR PANELS ─────────────────────────────────── */
 .sidebar-panel {
   display: flex;

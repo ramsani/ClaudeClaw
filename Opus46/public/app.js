@@ -601,6 +601,129 @@ function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── SELECTION TOOLBAR ─────────────────────────────────────────
+(function initSelectionToolbar() {
+  const toolbar = document.createElement('div');
+  toolbar.id = 'selection-toolbar';
+  toolbar.className = 'selection-toolbar hidden';
+  toolbar.innerHTML = `
+    <button data-action="copy" title="Copiar">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+      Copiar
+    </button>
+    <button data-action="ask" title="Preguntar sobre esto">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      Preguntar
+    </button>
+    <button data-action="nota" title="Guardar nota en Nova">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Nota
+    </button>
+    <button data-action="accion" title="Crear acción en Nova">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Acción
+    </button>
+    <button data-action="buscar" title="Buscar en historial">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      Buscar
+    </button>
+  `;
+  document.body.appendChild(toolbar);
+
+  let selectedText = '';
+  let hideTimer = null;
+
+  function showToolbar(x, y, text) {
+    selectedText = text;
+    clearTimeout(hideTimer);
+    // Posición sobre la selección
+    const tw = 320, th = 40;
+    let left = x - tw / 2;
+    let top  = y - th - 10;
+    left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+    top  = top < 8 ? y + 16 : top;
+    toolbar.style.left = left + 'px';
+    toolbar.style.top  = top  + 'px';
+    toolbar.classList.remove('hidden');
+  }
+
+  function hideToolbar() {
+    hideTimer = setTimeout(() => toolbar.classList.add('hidden'), 150);
+  }
+
+  // Mostrar al soltar el mouse sobre un bubble del chat
+  document.addEventListener('mouseup', e => {
+    // Solo si el mouseup ocurre dentro del chat
+    if (!e.target.closest('#chat')) return hideToolbar();
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel?.toString().trim();
+      if (!text || text.length < 3) return hideToolbar();
+      // Solo dentro de burbujas
+      const anchor = sel.anchorNode?.parentElement?.closest('.bubble');
+      if (!anchor) return hideToolbar();
+      const range = sel.getRangeAt(0).getBoundingClientRect();
+      showToolbar(range.left + range.width / 2, range.top + window.scrollY, text);
+    }, 10);
+  });
+
+  // Ocultar al hacer click fuera
+  document.addEventListener('mousedown', e => {
+    if (!e.target.closest('#selection-toolbar')) hideToolbar();
+  });
+
+  // Touch: mostrar después de selección táctil
+  document.addEventListener('selectionchange', () => {
+    const sel = window.getSelection();
+    const text = sel?.toString().trim();
+    if (!text || text.length < 3) return;
+    const anchor = sel.anchorNode?.parentElement?.closest('.bubble');
+    if (!anchor) return;
+    // En touch, posicionar en centro de pantalla
+    if (window.matchMedia('(pointer: coarse)').matches) {
+      showToolbar(window.innerWidth / 2, 80, text);
+    }
+  });
+
+  // Acciones
+  toolbar.addEventListener('mousedown', e => e.preventDefault()); // no perder selección
+  toolbar.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const text = selectedText;
+    hideToolbar();
+    window.getSelection()?.removeAllRanges();
+
+    if (action === 'copy') {
+      await navigator.clipboard.writeText(text);
+      showToast('Copiado', 'success');
+    } else if (action === 'ask') {
+      inputEl.value = `Sobre esto: "${text.slice(0, 200)}"\n\n`;
+      inputEl.focus();
+      // Mover cursor al final
+      inputEl.selectionStart = inputEl.selectionEnd = inputEl.value.length;
+      if (typeof autoResizeTextarea === 'function') autoResizeTextarea();
+    } else if (action === 'nota') {
+      const title = text.split('\n')[0].slice(0, 160);
+      await saveToNova('nota', title, text);
+    } else if (action === 'accion') {
+      const title = text.split('\n')[0].slice(0, 160);
+      await saveToNova('accion', title, text);
+    } else if (action === 'buscar') {
+      // Activar búsqueda con el texto seleccionado
+      const searchBar = document.getElementById('search-bar');
+      const searchInput = document.getElementById('search-input');
+      if (searchBar && searchInput) {
+        searchBar.classList.remove('hidden');
+        searchInput.value = text.slice(0, 60);
+        searchInput.focus();
+        searchInput.dispatchEvent(new Event('input'));
+      }
+    }
+  });
+})();
+
 // ── SCROLL ────────────────────────────────────────────────────
 function isAtBottom() {
   return chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 60;
