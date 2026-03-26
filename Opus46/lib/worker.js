@@ -169,25 +169,45 @@ async function workerLoop() {
   }
 }
 
-// ── Recordatorios de Nova con due_at vencido ─────────────────
-// Las acciones de Nova son recordatorios PARA EL USUARIO, no tareas
-// para que Claude ejecute. Solo se envía notificación Telegram directa.
-async function syncNovaActions() {
+// ── Revisión proactiva cada 3h (solo 8:00–20:00 hora México) ──
+// NO toca la tabla actions — n8n ya gestiona recordatorios.
+// Solo analiza qué tareas pendientes puede resolver Claude
+// y propone ayuda concreta al usuario vía Telegram.
+async function proactiveReview() {
+  const hora = new Date().toLocaleString('es-MX', {
+    timeZone: 'America/Mexico_City', hour: 'numeric', hour12: false
+  });
+  if (parseInt(hora) < 8 || parseInt(hora) >= 20) {
+    console.log(`[worker] proactiveReview omitida — hora=${hora} fuera de 8-20`);
+    return;
+  }
+
   try {
     const { rows } = await db.pool.query(`
-      SELECT * FROM actions
-      WHERE status='active' AND due_at IS NOT NULL AND due_at != '' AND due_at::timestamptz <= NOW()
-      ORDER BY due_at ASC LIMIT 5
+      SELECT title, content, action_type FROM actions
+      WHERE status='active' ORDER BY created_at DESC LIMIT 20
     `);
-    for (const action of rows) {
-      const chatId = action.telegram_chat_id || ALLOWED_ID;
-      await sendTelegram(chatId,
-        `⏰ *Recordatorio:* ${action.title}${action.content ? `\n\n${action.content}` : ''}`
-      );
-      await db.pool.query(`UPDATE actions SET status='queued' WHERE id=$1`, [action.id]);
-      console.log(`[worker] recordatorio Nova #${action.id} enviado por Telegram`);
+    if (!rows.length) return;
+
+    const lista = rows.map((a, i) =>
+      `${i + 1}. [${a.action_type || 'tarea'}] ${a.title}${a.content ? ': ' + a.content.slice(0, 80) : ''}`
+    ).join('\n');
+
+    const prompt = `Tienes acceso a la lista de tareas pendientes del usuario. Tu trabajo es identificar SOLO las que tú, como IA, puedes resolver de verdad sin intervención humana (investigar, redactar, analizar, escribir código, buscar información, hacer cálculos, etc.).
+
+Lista de tareas pendientes:
+${lista}
+
+Responde ÚNICAMENTE con un mensaje corto para enviar por Telegram. Si hay tareas donde puedes ayudar concretamente, menciona máximo 3, sé específico en qué harías exactamente. Si ninguna es delegable a una IA, di "Tus tareas actuales requieren acción directa tuya, no tengo trabajo computacional que hacer por ti ahora."
+
+No ejecutes nada. Solo propón.`;
+
+    const result = await executeWithClaude(prompt, null, WORK_DIR);
+    if (result && result.trim()) {
+      await sendTelegram(ALLOWED_ID, `🤖 *Revisión proactiva:*\n\n${result.trim()}`);
+      console.log('[worker] revisión proactiva enviada');
     }
-  } catch(e) { console.error('[worker] syncNovaActions:', e.message); }
+  } catch(e) { console.error('[worker] proactiveReview:', e.message); }
 }
 
 // ── Graceful shutdown ─────────────────────────────────────────
@@ -227,9 +247,9 @@ async function main() {
     try { await db.stateSet('worker_heartbeat', String(Date.now())); } catch {}
   }, HB_MS);
 
-  // Sincronizar acciones de Nova cada 60s
-  setInterval(syncNovaActions, 60_000);
-  syncNovaActions();
+  // Revisión proactiva cada 3 horas (solo 8:00–20:00 México)
+  setInterval(proactiveReview, 3 * 60 * 60_000);
+  proactiveReview(); // primera vez al arrancar (respeta el horario)
 
   // Loop principal
   workerLoop(); // no await — corre indefinidamente
