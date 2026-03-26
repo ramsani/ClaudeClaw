@@ -763,10 +763,12 @@ const server = http.createServer(async (req, res) => {
       const { message, chat_id } = JSON.parse(body.toString());
       if (!message) return jsonRes(res, 400, { error: 'message required' });
       console.log(`[execute] chat=${chat_id} msg=${String(message).slice(0, 80)}`);
+      const tgUser = chat_id ? await db.getUserByTelegramChatId(String(chat_id)).catch(() => null) : null;
+      const tgUserId = tgUser?.user_id || null;
 
       let result;
       try {
-        result = await route(message, chat_id, 'telegram');
+        result = await route(message, chat_id, 'telegram', 'myclaw', tgUserId);
       } catch (e) {
         if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
         throw e;
@@ -786,6 +788,8 @@ const server = http.createServer(async (req, res) => {
       if (!file_id) return jsonRes(res, 400, { error: 'file_id required' });
 
       console.log(`[execute-with-file] file_id=${file_id} mime=${mime_type} chat=${chat_id}`);
+      const ewfUser = chat_id ? await db.getUserByTelegramChatId(String(chat_id)).catch(() => null) : null;
+      const ewfUserId = ewfUser?.user_id || null;
 
       const { buffer, filePath } = await downloadTelegramFile(file_id);
       const ext = path.extname(filePath) || '.bin';
@@ -808,7 +812,7 @@ const server = http.createServer(async (req, res) => {
             : `Tengo un PDF en: ${savedPath}\nAnalízalo.`;
         }
         try {
-          result = await route(msg, chat_id, 'telegram');
+          result = await route(msg, chat_id, 'telegram', 'myclaw', ewfUserId);
         } catch (e) {
           if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
           throw e;
@@ -820,7 +824,7 @@ const server = http.createServer(async (req, res) => {
           uuid: fileUuid, channel: 'telegram', role: 'user',
           content: caption || '[imagen]',
           chat_id: chat_id ? String(chat_id) : null,
-          session_uuid: null, file_path: savedPath,
+          session_uuid: null, file_path: savedPath, user_id: ewfUserId,
         }).catch(() => {});
         try {
           result = await queue.push(() => askClaudeWithImage(base64Data, mime_type, caption, chat_id, workspaces.get('myclaw')));
@@ -832,14 +836,14 @@ const server = http.createServer(async (req, res) => {
         db.insertMessage({
           uuid: assistantUuid, channel: 'telegram', role: 'assistant',
           content: result, chat_id: chat_id ? String(chat_id) : null,
-          session_uuid: null, file_path: null,
+          session_uuid: null, file_path: null, user_id: ewfUserId,
         }).catch(() => {});
       } else {
         msg = caption
           ? `${caption}\n\n[Archivo guardado en: ${savedPath}]`
           : `Tengo un archivo en: ${savedPath}\nAnalízalo o úsalo según sea necesario.`;
         try {
-          result = await route(msg, chat_id, 'telegram');
+          result = await route(msg, chat_id, 'telegram', 'myclaw', ewfUserId);
         } catch (e) {
           if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
           throw e;

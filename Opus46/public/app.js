@@ -558,26 +558,29 @@ async function loadHistory(before = null, search = null) {
     // Si el workspace cambió mientras esperábamos la respuesta, descartar
     if (isInitial && myLoadId !== historyLoadId) return;
 
-    const msgs = await res.json(); // llega en orden DESC (más nuevo primero)
+    const msgs = await res.json(); // llega en orden ASC (más antiguo primero)
 
     if (!before) {
-      // Carga inicial: invertir para tener ASC (más antiguo primero) y append normal
+      // Carga inicial: msgs ya en ASC → append directo oldest→newest
       chatEl.innerHTML = '';
       renderedUuids.clear();
       if (msgs.length === 0) {
         const es = document.getElementById('empty-state');
         if (es) chatEl.appendChild(es);
       } else {
-        msgs.slice().reverse().forEach(m => appendMessage(m, false));
+        msgs.forEach(m => appendMessage(m, false));
       }
-      historyBeforeTs = msgs.length > 0 ? msgs[msgs.length - 1].created_at : null;
+      // El más antiguo cargado (primer elemento) es el límite para scroll hacia arriba
+      historyBeforeTs = msgs.length > 0 ? msgs[0].created_at : null;
       if (msgs.length > 0) scrollToBottom();
     } else {
+      // Scroll hacia arriba: preparar oldest→newest encima del chat existente
       if (msgs.length === 0) {
         historyBeforeTs = null;
       } else {
-        msgs.forEach(m => appendMessage(m, true));
-        historyBeforeTs = msgs[msgs.length - 1].created_at;
+        // Prepend en orden inverso para que msg[0] quede arriba del todo
+        [...msgs].reverse().forEach(m => appendMessage(m, true));
+        historyBeforeTs = msgs[0].created_at;
       }
     }
   } catch (e) {
