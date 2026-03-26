@@ -78,4 +78,5 @@ class MessageQueue {
   }
 }
 
-module.exports = new MessageQueue();
+// Exportar la clase para que el bridge cree instancias por workspace
+module.exports = MessageQueue;

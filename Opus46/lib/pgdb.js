@@ -61,6 +61,27 @@ async function init() {
         ADD COLUMN IF NOT EXISTS novaclaw_active BOOLEAN DEFAULT FALSE;
     `);
 
+    // Tabla de workspaces
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS novaclaw_workspaces (
+        id          VARCHAR(40) PRIMARY KEY,
+        name        VARCHAR(100) NOT NULL,
+        path        TEXT NOT NULL,
+        color       VARCHAR(20) DEFAULT '#007AFF',
+        description TEXT DEFAULT '',
+        sort_order  INTEGER DEFAULT 0,
+        active      BOOLEAN DEFAULT TRUE,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    // workspace_id en mensajes
+    await client.query(`
+      ALTER TABLE novaclaw_messages
+        ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(40) DEFAULT 'myclaw';
+      CREATE INDEX IF NOT EXISTS idx_ncm_ws ON novaclaw_messages(workspace_id, created_at DESC);
+    `);
+
     console.log('[pgdb] PostgreSQL conectado y tablas listas');
   } finally {
     client.release();
@@ -85,27 +106,28 @@ async function stateSet(key, value, userId = '') {
 }
 
 // ── mensajes ────────────────────────────────────────────────
-async function insertMessage({ uuid, channel, role, content, chat_id, session_uuid, file_path, user_id }) {
+async function insertMessage({ uuid, channel, role, content, chat_id, session_uuid, file_path, user_id, workspace_id }) {
   await pool.query(
     `INSERT INTO novaclaw_messages
-       (uuid, user_id, telegram_chat_id, channel, role, content, session_uuid, file_path, created_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (uuid, user_id, telegram_chat_id, channel, role, content, session_uuid, file_path, workspace_id, created_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (uuid) DO NOTHING`,
     [uuid, user_id || null, chat_id || null, channel, role, content,
-     session_uuid || null, file_path || null, Date.now()]
+     session_uuid || null, file_path || null, workspace_id || 'myclaw', Date.now()]
   );
 }
 
-async function getHistory({ limit = 50, before = null, q = null, starred = false, user_id = null } = {}) {
+async function getHistory({ limit = 50, before = null, q = null, starred = false, user_id = null, workspace_id = null } = {}) {
   const safeLimit = Math.min(isFinite(limit) ? limit : 50, 200);
   const conditions = [];
   const params = [];
   let i = 1;
 
-  if (user_id)   { conditions.push(`user_id = $${i++}`);        params.push(user_id); }
-  if (before != null) { conditions.push(`created_at < $${i++}`); params.push(before); }
-  if (q)         { conditions.push(`content ILIKE $${i++}`);    params.push(`%${q}%`); }
-  if (starred)   { conditions.push(`starred = TRUE`); }
+  if (workspace_id) { conditions.push(`workspace_id = $${i++}`);  params.push(workspace_id); }
+  if (user_id)      { conditions.push(`user_id = $${i++}`);       params.push(user_id); }
+  if (before != null) { conditions.push(`created_at < $${i++}`);  params.push(before); }
+  if (q)            { conditions.push(`content ILIKE $${i++}`);   params.push(`%${q}%`); }
+  if (starred)      { conditions.push(`starred = TRUE`); }
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
   params.push(safeLimit);
@@ -167,6 +189,28 @@ async function setUserPassword(userId, password) {
   );
 }
 
+// ── workspaces ──────────────────────────────────────────────
+async function getWorkspaces() {
+  const { rows } = await pool.query(
+    `SELECT * FROM novaclaw_workspaces WHERE active=TRUE ORDER BY sort_order ASC, created_at ASC`
+  );
+  return rows;
+}
+
+async function upsertWorkspace({ id, name, path: wsPath, color, description, sort_order }) {
+  await pool.query(
+    `INSERT INTO novaclaw_workspaces(id, name, path, color, description, sort_order)
+     VALUES($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, path=EXCLUDED.path,
+       color=EXCLUDED.color, description=EXCLUDED.description, sort_order=EXCLUDED.sort_order`,
+    [id, name, wsPath, color || '#007AFF', description || '', sort_order || 0]
+  );
+}
+
+async function deleteWorkspace(id) {
+  await pool.query(`UPDATE novaclaw_workspaces SET active=FALSE WHERE id=$1`, [id]);
+}
+
 // ── notas (shared con Nova) ─────────────────────────────────
 async function getNotes({ user_id, limit = 20 } = {}) {
   const where = user_id ? 'WHERE user_id=$1' : '';
@@ -219,5 +263,6 @@ module.exports = {
   stateGet, stateSet,
   insertMessage, getHistory, starMessage, exportMessages,
   getUserByTelegramChatId, getUserByUserId, verifyUserPassword, setUserPassword,
+  getWorkspaces, upsertWorkspace, deleteWorkspace,
   getNotes, createNote, getActions, createAction,
 };

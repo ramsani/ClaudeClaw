@@ -32,6 +32,104 @@ let historyBeforeTs = null;
 let loadingHistory = false;
 const renderedUuids = new Set();
 
+// ── WORKSPACES ────────────────────────────────────────────────
+let workspaceList = [];
+let activeWorkspaceId = localStorage.getItem('active_workspace') || 'myclaw';
+
+function getActiveWorkspace() {
+  return workspaceList.find(w => w.id === activeWorkspaceId) || { id: 'myclaw', name: 'MyClaw', color: '#007AFF' };
+}
+
+function setActiveWorkspace(id) {
+  activeWorkspaceId = id;
+  localStorage.setItem('active_workspace', id);
+  updateWorkspaceUI();
+  chatEl.innerHTML = '';
+  renderedUuids.clear();
+  historyBeforeTs = null;
+  loadHistory();
+  const emptyState = document.getElementById('empty-state');
+  if (emptyState) chatEl.appendChild(emptyState);
+}
+
+async function loadWorkspaces() {
+  try {
+    const res = await fetch('/api/workspaces', { headers: authHeaders() });
+    if (!res.ok) return;
+    workspaceList = await res.json();
+    // Ensure activeWorkspaceId is valid
+    if (!workspaceList.find(w => w.id === activeWorkspaceId)) {
+      activeWorkspaceId = 'myclaw';
+      localStorage.setItem('active_workspace', 'myclaw');
+    }
+    renderWorkspaceList();
+    updateWorkspaceUI();
+  } catch {}
+}
+
+function renderWorkspaceList() {
+  const container = document.getElementById('workspace-list');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const ws of workspaceList) {
+    const item = document.createElement('div');
+    item.className = `workspace-item${ws.id === activeWorkspaceId ? ' active' : ''}`;
+    item.dataset.id = ws.id;
+    item.innerHTML = `
+      <span class="ws-dot" style="background:${ws.color}"></span>
+      <span class="ws-name">${ws.name}</span>
+      ${ws.queue?.busy ? '<span class="ws-busy-dot"></span>' : ''}
+    `;
+    item.addEventListener('click', () => setActiveWorkspace(ws.id));
+    container.appendChild(item);
+  }
+  // Add workspace button
+  const addBtn = document.createElement('button');
+  addBtn.className = 'ws-add-btn';
+  addBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Nueva sesión';
+  addBtn.addEventListener('click', showAddWorkspaceModal);
+  container.appendChild(addBtn);
+}
+
+function updateWorkspaceUI() {
+  const ws = getActiveWorkspace();
+  // Header badge
+  const badge = document.getElementById('workspace-badge');
+  if (badge) {
+    badge.textContent = ws.name;
+    badge.style.background = ws.color + '22';
+    badge.style.color = ws.color;
+  }
+  // Highlight active in list
+  document.querySelectorAll('.workspace-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === activeWorkspaceId);
+  });
+}
+
+function showAddWorkspaceModal() {
+  const id    = prompt('ID del workspace (letras, números, guión):');
+  if (!id) return;
+  const name  = prompt('Nombre a mostrar:');
+  if (!name) return;
+  const wsPath = prompt('Path completo del proyecto (ej: /Users/papa/0Proyectos/Nova):');
+  if (!wsPath) return;
+  const color = prompt('Color (hex, ej: #34C759):', '#007AFF') || '#007AFF';
+
+  fetch('/api/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ id, name, path: wsPath, color }),
+  }).then(async r => {
+    if (r.ok) {
+      showToast(`Workspace "${name}" creado`, 'success');
+      await loadWorkspaces();
+    } else {
+      const e = await r.json().catch(() => ({}));
+      showToast(e.error || 'Error creando workspace', 'error');
+    }
+  }).catch(() => showToast('Error de conexión', 'error'));
+}
+
 // ── HELPERS DOM ───────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const loginScreen   = $('login-screen');
@@ -96,7 +194,7 @@ function showApp() {
   loginScreen.classList.add('hidden');
   app.classList.remove('hidden');
   connectWS();
-  loadHistory();
+  loadWorkspaces().then(() => loadHistory());
   loadFiles();
   setupStatusPoller();
 }
@@ -134,10 +232,16 @@ function connectWS() {
 }
 
 function handleWSEvent(ev) {
+  // Solo mostrar eventos del workspace activo (excepto errores globales)
+  if (ev.workspace_id && ev.workspace_id !== activeWorkspaceId && ev.type !== 'error') {
+    // Actualizar indicador de actividad en el sidebar
+    updateWorkspaceBusyDot(ev.workspace_id, ev.type === 'typing' ? ev.active : null);
+    return;
+  }
   switch (ev.type) {
     case 'message':
       appendMessage(ev);
-      if (ev.role === 'user') scrollToBottom(); // siempre ver el propio mensaje
+      if (ev.role === 'user') scrollToBottom();
       if (ev.role === 'assistant' && soundEnabled) playChime();
       break;
     case 'typing':
@@ -147,6 +251,7 @@ function handleWSEvent(ev) {
       } else {
         typingEl.classList.add('hidden');
       }
+      updateWorkspaceBusyDot(ev.workspace_id || activeWorkspaceId, ev.active);
       break;
     case 'thinking':
       chatEl.appendChild(typingEl);
@@ -155,6 +260,19 @@ function handleWSEvent(ev) {
     case 'error':
       handleWSError(ev);
       break;
+  }
+}
+
+function updateWorkspaceBusyDot(wsId, busy) {
+  const item = document.querySelector(`.workspace-item[data-id="${wsId}"]`);
+  if (!item) return;
+  let dot = item.querySelector('.ws-busy-dot');
+  if (busy && !dot) {
+    dot = document.createElement('span');
+    dot.className = 'ws-busy-dot';
+    item.appendChild(dot);
+  } else if (!busy && dot) {
+    dot.remove();
   }
 }
 
@@ -181,7 +299,7 @@ async function loadHistory(before = null, search = null) {
   if (loadingHistory) return;
   loadingHistory = true;
   try {
-    let url = `/api/history?limit=40`;
+    let url = `/api/history?limit=40&workspace_id=${encodeURIComponent(activeWorkspaceId)}`;
     if (before) url += `&before=${before}`;
     if (search) url += `&q=${encodeURIComponent(search)}`;
     const res = await fetch(url, { headers: authHeaders() });
@@ -453,7 +571,7 @@ async function sendMessage(text) {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ message: msg }),
+      body: JSON.stringify({ message: msg, workspace_id: activeWorkspaceId }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

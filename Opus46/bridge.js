@@ -52,12 +52,12 @@ loadEnv();
 // ============================================================
 // MÓDULOS V3
 // ============================================================
-const db      = require('./lib/pgdb');   // PostgreSQL compartido con Nova
-const session = require('./lib/session');
-const queue   = require('./lib/queue');
-const auth    = require('./lib/auth');
-const ws      = require('./lib/ws');
-const files   = require('./lib/files');
+const db           = require('./lib/pgdb');   // PostgreSQL compartido con Nova
+const session      = require('./lib/session');
+const MessageQueue = require('./lib/queue');   // clase, no singleton
+const auth         = require('./lib/auth');
+const ws           = require('./lib/ws');
+const files        = require('./lib/files');
 
 // Init async — PostgreSQL necesita conectarse antes de servir
 let pgReady = false;
@@ -88,13 +88,96 @@ const LOCK_FILE = '/tmp/claudeclaw-bridge.lock';
 // ============================================================
 // CONFIG
 // ============================================================
-const OPENAI_KEY  = process.env.OPENAI_KEY;
-const TG_TOKEN    = process.env.TG_TOKEN;
-const MINIMAX_URL = process.env.ANTHROPIC_BASE_URL;
-const MINIMAX_KEY = process.env.ANTHROPIC_AUTH_TOKEN;
-const API_PORT    = parseInt(process.env.BRIDGE_PORT || '5679', 10);
-const TIMEOUT_MS  = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10);
-const WORK_DIR    = process.env.WORK_DIR || path.join(os.homedir(), '0Proyectos', 'MyClaw');
+const OPENAI_KEY    = process.env.OPENAI_KEY;
+const TG_TOKEN      = process.env.TG_TOKEN;
+const MINIMAX_URL   = process.env.ANTHROPIC_BASE_URL;
+const MINIMAX_KEY   = process.env.ANTHROPIC_AUTH_TOKEN;
+const API_PORT      = parseInt(process.env.BRIDGE_PORT || '5679', 10);
+const TIMEOUT_MS    = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10);
+const WORK_DIR      = process.env.WORK_DIR || path.join(os.homedir(), '0Proyectos', 'MyClaw');
+const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_CLAUDE || '2', 10);
+
+// ============================================================
+// SEMÁFORO GLOBAL — máx N procesos claude simultáneos
+// ============================================================
+let _activeClaudes = 0;
+function withSemaphore(fn) {
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      if (_activeClaudes < MAX_CONCURRENT) {
+        _activeClaudes++;
+        fn().then(r => { _activeClaudes--; resolve(r); },
+                  e => { _activeClaudes--; reject(e); });
+      } else {
+        setTimeout(attempt, 250);
+      }
+    };
+    attempt();
+  });
+}
+
+// ============================================================
+// WORKSPACE MANAGER
+// ============================================================
+const workspaces = {
+  _map: new Map(), // id → { id, name, path, color, description, queue }
+
+  async load() {
+    let rows = [];
+    try { rows = await db.getWorkspaces(); } catch {}
+    for (const ws of rows) {
+      if (!this._map.has(ws.id)) {
+        this._map.set(ws.id, { ...ws, queue: new MessageQueue() });
+      }
+    }
+    // Workspace default: MyClaw siempre existe
+    if (!this._map.has('myclaw')) {
+      const def = { id: 'myclaw', name: 'MyClaw', path: WORK_DIR, color: '#007AFF', description: 'Workspace principal', sort_order: 0 };
+      try { await db.upsertWorkspace(def); } catch {}
+      this._map.set('myclaw', { ...def, queue: new MessageQueue() });
+    }
+  },
+
+  get(id) {
+    return this._map.get(id) || this._map.get('myclaw');
+  },
+
+  all() {
+    return Array.from(this._map.values()).map(({ queue: q, ...ws }) => ({
+      ...ws,
+      queue: q.status(),
+      activeClaudes: _activeClaudes,
+    }));
+  },
+
+  async add({ id, name, path: wsPath, color, description }) {
+    // Validar path — debe existir y estar bajo home
+    const resolved = path.resolve(wsPath);
+    if (!resolved.startsWith(os.homedir())) throw Object.assign(new Error('path must be under home dir'), { code: 'invalid_path' });
+    if (!fs.existsSync(resolved)) throw Object.assign(new Error('path does not exist'), { code: 'invalid_path' });
+    const safeId = id.replace(/[^a-z0-9_-]/gi, '-').toLowerCase().slice(0, 40);
+    const ws = { id: safeId, name, path: resolved, color: color || '#007AFF', description: description || '', sort_order: this._map.size };
+    await db.upsertWorkspace(ws);
+    this._map.set(safeId, { ...ws, queue: new MessageQueue() });
+    // Crear carpeta reports/ en MyClaw si no existe
+    const reportsDir = path.join(WORK_DIR, 'reports');
+    if (!fs.existsSync(reportsDir)) fs.mkdirSync(reportsDir, { recursive: true });
+    // Crear CLAUDE.md en el workspace si no existe
+    const claudeMd = path.join(resolved, 'CLAUDE.md');
+    if (!fs.existsSync(claudeMd)) {
+      fs.writeFileSync(claudeMd,
+        `# Workspace: ${name}\n\nAl completar cualquier tarea significativa, actualiza el archivo:\n${path.join(WORK_DIR, 'reports', safeId + '.md')}\n\nFormato del reporte:\n- **Qué hice:** breve descripción\n- **Estado:** en progreso / completado / bloqueado\n- **Próximos pasos:** ...\n`
+      );
+    }
+    return ws;
+  },
+
+  async remove(id) {
+    if (id === 'myclaw') throw new Error('no se puede eliminar el workspace por defecto');
+    await db.deleteWorkspace(id);
+    this._map.delete(id);
+  },
+};
 
 if (!MINIMAX_KEY) {
   console.error('❌ Falta ANTHROPIC_AUTH_TOKEN en .env');
@@ -181,9 +264,10 @@ function parseStreamJson(line, chatId, seenTools, sessionRef, messageUuid) {
 // ============================================================
 // CLAUDE CORE — con sesión persistente y captura de session_id
 // ============================================================
-function _spawnClaude(args, chatId, channel, messageUuid) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('claude', args, { env: CLAUDE_ENV, cwd: WORK_DIR });
+function _spawnClaude(args, chatId, channel, messageUuid, wsId, wsPath) {
+  return withSemaphore(() => new Promise((resolve, reject) => {
+    const cwd = wsPath || WORK_DIR;
+    const proc = spawn('claude', args, { env: CLAUDE_ENV, cwd });
 
     sendTelegramProgress(chatId, '⚡ Claude arrancó');
     ws.broadcast({ type: 'typing', active: true, channel: channel || 'telegram', chat_id: chatId });
@@ -224,10 +308,10 @@ function _spawnClaude(args, chatId, channel, messageUuid) {
         if (r !== null) result = r;
       }
 
-      // Guardar session_id si lo capturamos
+      // Guardar session_id si lo capturamos (por workspace)
       if (sessionRef.id) {
-        session.saveSession(sessionRef.id);
-        console.log(`[session] guardado ${sessionRef.id}`);
+        session.saveSession(sessionRef.id, wsId || 'myclaw');
+        console.log(`[session] guardado ${sessionRef.id} ws=${wsId || 'myclaw'}`);
       }
 
       ws.broadcast({ type: 'typing', active: false });
@@ -242,45 +326,48 @@ function _spawnClaude(args, chatId, channel, messageUuid) {
     });
 
     proc.on('error', err => { clearTimeout(timer); reject(err); });
-  });
+  }));
+}
+
+// Derivar clave de proyectos de Claude desde el path del workspace
+// /Users/papa/0Proyectos/Nova → -Users-papa-0Proyectos-Nova
+function claudeProjectsKey(wsPath) {
+  return wsPath.replace(/\//g, '-');
 }
 
 // Construir args para claude según si tenemos sesión guardada
-function buildClaudeArgs(message, uuid) {
+function buildClaudeArgs(message, uuid, wsPath) {
   const base = [
     '--print', '--verbose',
     '--output-format', 'stream-json',
     '--dangerously-skip-permissions',
   ];
 
-  // Solo usar --resume si el archivo de sesión existe localmente.
-  // MiniMax devuelve session_ids que no crean archivos en ~/.claude/ — usar --continue en ese caso.
   if (uuid) {
-    const sessionFile = path.join(os.homedir(), '.claude', 'projects',
-      '-Users-papa-0Proyectos-MyClaw', `${uuid}.jsonl`);
+    const key = claudeProjectsKey(wsPath || WORK_DIR);
+    const sessionFile = path.join(os.homedir(), '.claude', 'projects', key, `${uuid}.jsonl`);
     if (fs.existsSync(sessionFile)) {
       return ['--resume', uuid, ...base, message];
     }
-    console.warn(`[session] UUID ${uuid} no tiene archivo local, usando --continue`);
+    console.warn(`[session] UUID ${uuid} sin archivo local (ws=${key}), usando --continue`);
   }
   return [...base, '--continue', message];
 }
 
-// askClaude con retry automático si session_not_found
-async function askClaude(message, chatId, channel, messageUuid) {
-  const uuid = await session.loadSession();
+// askClaude con retry automático si session_not_found — workspace-aware
+async function askClaude(message, chatId, channel, messageUuid, workspace) {
+  const wsId   = workspace?.id   || 'myclaw';
+  const wsPath = workspace?.path || WORK_DIR;
+  const uuid   = await session.loadSession(wsId);
 
   try {
-    const { result } = await _spawnClaude(buildClaudeArgs(message, uuid), chatId, channel, messageUuid);
+    const { result } = await _spawnClaude(buildClaudeArgs(message, uuid, wsPath), chatId, channel, messageUuid, wsId, wsPath);
     return result;
   } catch (err) {
     if (err.code === 'session_not_found' && uuid) {
-      console.warn('[bridge] session no encontrada, limpiando y reintentando sin --resume');
-      await session.clearSession();
-      const { result } = await _spawnClaude(
-        buildClaudeArgs(message, null),
-        chatId, channel, messageUuid
-      );
+      console.warn(`[bridge] session no encontrada ws=${wsId}, limpiando y reintentando`);
+      await session.clearSession(wsId);
+      const { result } = await _spawnClaude(buildClaudeArgs(message, null, wsPath), chatId, channel, messageUuid, wsId, wsPath);
       return result;
     }
     throw err;
@@ -290,9 +377,11 @@ async function askClaude(message, chatId, channel, messageUuid) {
 // ============================================================
 // CLAUDE CON IMAGEN (vision via --input-format stream-json)
 // ============================================================
-async function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
-  const uuid = await session.loadSession();
-  return new Promise((resolve, reject) => {
+async function askClaudeWithImage(base64Data, mimeType, caption, chatId, workspace) {
+  const wsId   = workspace?.id   || 'myclaw';
+  const wsPath = workspace?.path || WORK_DIR;
+  const uuid   = await session.loadSession(wsId);
+  return withSemaphore(() => new Promise((resolve, reject) => {
     const input = JSON.stringify({
       messages: [{
         role: 'user',
@@ -312,7 +401,7 @@ async function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
       '--dangerously-skip-permissions',
     ];
 
-    const proc = spawn('claude', args, { env: CLAUDE_ENV, cwd: WORK_DIR });
+    const proc = spawn('claude', args, { env: CLAUDE_ENV, cwd: wsPath });
 
     proc.stdin.write(input);
     proc.stdin.end();
@@ -342,12 +431,12 @@ async function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
         const r = parseStreamJson(buffer.trim(), chatId, seenTools, sessionRef);
         if (r !== null) result = r;
       }
-      if (sessionRef.id) session.saveSession(sessionRef.id);
+      if (sessionRef.id) session.saveSession(sessionRef.id, wsId);
       resolve(result || stderr.trim() || `Exit ${code}`);
     });
 
     proc.on('error', err => { clearTimeout(timer); reject(err); });
-  });
+  }));
 }
 
 // ============================================================
@@ -414,8 +503,8 @@ const CMD = {
   fecha:      () => new Date().toLocaleDateString('es-MX', { weekday:'long', year:'numeric', month:'long', day:'numeric' }),
   uptime:     () => { const s = process.uptime(); return `Uptime: ${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`; },
   status:     () => {
-    const q = queue.status();
-    return `Bridge v3 ✅\nProvider: MiniMax\nUptime: ${Math.floor(process.uptime()/60)}min\nCola: ${q.size}/${q.maxSize} (busy: ${q.busy})`;
+    const wsList = workspaces.all().map(w => `  ${w.name}: ${w.queue.busy ? 'pensando' : 'idle'} (cola: ${w.queue.size})`).join('\n');
+    return `Bridge v3 ✅\nProvider: MiniMax\nUptime: ${Math.floor(process.uptime()/60)}min\nClaudes activos: ${_activeClaudes}/${MAX_CONCURRENT}\nWorkspaces:\n${wsList}`;
   },
 
   screenshot: () => {
@@ -454,11 +543,13 @@ const CMD = {
 };
 
 // ============================================================
-// ROUTER: texto → comando local o Claude (via cola)
+// ROUTER: texto → comando local o Claude (via cola del workspace)
 // ============================================================
-async function route(message, chatId, channel = 'telegram') {
+async function route(message, chatId, channel = 'telegram', workspaceId = 'myclaw') {
   const text = (message || '').trim();
   if (!text) return '(mensaje vacío)';
+
+  const workspace = workspaces.get(workspaceId);
 
   // Comandos locales no pasan por la cola
   if (text.startsWith('/')) {
@@ -474,17 +565,19 @@ async function route(message, chatId, channel = 'telegram') {
   // Guardar mensaje del usuario en PostgreSQL + broadcast WS
   const userUuid = crypto.randomUUID();
   const now = Date.now();
-  const currentSession = await session.loadSession(chatId ? String(chatId) : '');
+  const wsId = workspace.id;
+  const currentSession = await session.loadSession(wsId);
   db.insertMessage({
     uuid: userUuid, channel, role: 'user', content: text,
     chat_id: chatId ? String(chatId) : null,
     session_uuid: currentSession, file_path: null,
+    workspace_id: wsId,
   }).catch(e => console.error('[db] insertMessage user error:', e.message));
-  ws.broadcast({ type: 'message', role: 'user', content: text, uuid: userUuid, channel, created_at: now });
+  ws.broadcast({ type: 'message', role: 'user', content: text, uuid: userUuid, channel, created_at: now, workspace_id: wsId });
 
-  // Encolar llamada a Claude (pasando uuid para correlacionar thinking events)
+  // Encolar en la cola del workspace específico
   const assistantUuid = crypto.randomUUID();
-  const result = await queue.push(() => askClaude(text, chatId, channel, assistantUuid));
+  const result = await workspace.queue.push(() => askClaude(text, chatId, channel, assistantUuid, workspace));
 
   // Guardar respuesta del asistente en PostgreSQL + broadcast WS
   const assistantNow = Date.now();
@@ -492,8 +585,9 @@ async function route(message, chatId, channel = 'telegram') {
     uuid: assistantUuid, channel, role: 'assistant', content: result,
     chat_id: chatId ? String(chatId) : null,
     session_uuid: currentSession, file_path: null,
+    workspace_id: wsId,
   }).catch(e => console.error('[db] insertMessage assistant error:', e.message));
-  ws.broadcast({ type: 'message', role: 'assistant', content: result, uuid: assistantUuid, channel, created_at: assistantNow });
+  ws.broadcast({ type: 'message', role: 'assistant', content: result, uuid: assistantUuid, channel, created_at: assistantNow, workspace_id: wsId });
 
   return result;
 }
@@ -545,27 +639,61 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       uptime: process.uptime(),
       provider: MINIMAX_URL,
-      queue: queue.status(),
-      session: await session.loadSession().catch(() => null),
+      workspaces: workspaces.all(),
+      activeClaudes: _activeClaudes,
+      maxConcurrent: MAX_CONCURRENT,
     });
   }
 
-  // GET /api/queue
+  // GET /api/queue  (compatibilidad hacia atrás — devuelve workspace por defecto)
   if (req.method === 'GET' && req.url === '/api/queue') {
-    return jsonRes(res, 200, queue.status());
+    return jsonRes(res, 200, workspaces.get('myclaw').queue.status());
   }
 
-  // GET /api/history?limit=50&before=<unix_ms>&q=<search>&starred=1
+  // GET /api/workspaces
+  if (req.method === 'GET' && req.url === '/api/workspaces') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    return jsonRes(res, 200, workspaces.all());
+  }
+
+  // POST /api/workspaces  { id, name, path, color?, description? }
+  if (req.method === 'POST' && req.url === '/api/workspaces') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const body = await readBody(req);
+      const data = JSON.parse(body.toString());
+      if (!data.id || !data.name || !data.path) return jsonRes(res, 400, { error: 'id, name y path son requeridos' });
+      const ws = await workspaces.add(data);
+      return jsonRes(res, 201, { ok: true, workspace: ws });
+    } catch (e) {
+      return jsonRes(res, e.code === 'invalid_path' ? 400 : 500, { error: e.message });
+    }
+  }
+
+  // DELETE /api/workspaces/:id
+  if (req.method === 'DELETE' && req.url.startsWith('/api/workspaces/')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const wsId = req.url.split('/')[3];
+      await workspaces.remove(wsId);
+      return jsonRes(res, 200, { ok: true });
+    } catch (e) {
+      return jsonRes(res, 400, { error: e.message });
+    }
+  }
+
+  // GET /api/history?limit=50&before=<unix_ms>&q=<search>&starred=1&workspace_id=myclaw
   if (req.method === 'GET' && req.url.startsWith('/api/history')) {
     if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
     try {
       const params = new URL(req.url, 'http://x').searchParams;
-      const limitRaw = parseInt(params.get('limit') || '50', 10);
-      const limit   = Math.min(Number.isFinite(limitRaw) ? limitRaw : 50, 200);
-      const before  = params.get('before') ? parseInt(params.get('before'), 10) : null;
-      const q       = params.get('q') || null;
-      const starred = params.get('starred') === '1';
-      const messages = await db.getHistory({ limit, before, q, starred });
+      const limitRaw    = parseInt(params.get('limit') || '50', 10);
+      const limit       = Math.min(Number.isFinite(limitRaw) ? limitRaw : 50, 200);
+      const before      = params.get('before') ? parseInt(params.get('before'), 10) : null;
+      const q           = params.get('q') || null;
+      const starred     = params.get('starred') === '1';
+      const workspace_id = params.get('workspace_id') || null;
+      const messages = await db.getHistory({ limit, before, q, starred, workspace_id });
       return jsonRes(res, 200, messages);
     } catch (e) {
       return jsonRes(res, 500, { error: e.message });
@@ -639,7 +767,7 @@ const server = http.createServer(async (req, res) => {
           session_uuid: null, file_path: savedPath,
         }).catch(() => {});
         try {
-          result = await queue.push(() => askClaudeWithImage(base64Data, mime_type, caption, chat_id));
+          result = await queue.push(() => askClaudeWithImage(base64Data, mime_type, caption, chat_id, workspaces.get('myclaw')));
         } catch (e) {
           if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
           throw e;
@@ -675,19 +803,20 @@ const server = http.createServer(async (req, res) => {
     return auth.loginHandler(req, res, body);
   }
 
-  // POST /api/chat  { message, chat_id? }  — PWA mensajes (requiere auth)
+  // POST /api/chat  { message, chat_id?, workspace_id? }  — PWA mensajes (requiere auth)
   if (req.method === 'POST' && req.url === '/api/chat') {
     if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
     try {
       const body = await readBody(req);
-      const { message, chat_id } = JSON.parse(body.toString());
+      const { message, chat_id, workspace_id } = JSON.parse(body.toString());
       if (!message) return jsonRes(res, 400, { error: 'message required' });
-      console.log(`[api/chat] msg=${String(message).slice(0, 80)}`);
+      const wsId = workspace_id || 'myclaw';
+      console.log(`[api/chat] ws=${wsId} msg=${String(message).slice(0, 80)}`);
       let result;
       try {
-        result = await route(message, chat_id || null, 'pwa');
+        result = await route(message, chat_id || null, 'pwa', wsId);
       } catch (e) {
-        if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: queue.status() });
+        if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: workspaces.get(wsId).queue.status() });
         throw e;
       }
       return jsonRes(res, 200, { result });
@@ -1052,13 +1181,15 @@ ws.init(server);
 
 server.listen(API_PORT, '0.0.0.0', async () => {
   await pgInitPromise;
-  const uuid = await session.loadSession().catch(() => null);
-  console.log('🚀 ClaudeClaw Bridge v3 iniciado');
-  console.log(`   API:      http://0.0.0.0:${API_PORT}`);
-  console.log(`   Provider: ${MINIMAX_URL}`);
-  console.log(`   WorkDir:  ${WORK_DIR}`);
-  console.log(`   Session:  ${uuid || '(nueva)'}`);
-  console.log(`   Timeout:  ${TIMEOUT_MS / 1000}s`);
-  console.log(`   WS:       ws://0.0.0.0:${API_PORT}/ws`);
-  console.log('   Modo: stream-json + cola serializada + PostgreSQL + WebSocket');
+  await workspaces.load();
+  const uuid = await session.loadSession('myclaw').catch(() => null);
+  console.log('ClaudeClaw Bridge v3 iniciado');
+  console.log(`   API:        http://0.0.0.0:${API_PORT}`);
+  console.log(`   Provider:   ${MINIMAX_URL}`);
+  console.log(`   WorkDir:    ${WORK_DIR}`);
+  console.log(`   Session:    ${uuid || '(nueva)'}`);
+  console.log(`   Timeout:    ${TIMEOUT_MS / 1000}s`);
+  console.log(`   WS:         ws://0.0.0.0:${API_PORT}/ws`);
+  console.log(`   Concurrent: ${MAX_CONCURRENT} Claude(s) max`);
+  console.log(`   Workspaces: ${workspaces.all().map(w => w.name).join(', ')}`);
 });
