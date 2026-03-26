@@ -197,6 +197,13 @@ async function getWorkspaces() {
   return rows;
 }
 
+async function getArchivedWorkspaces() {
+  const { rows } = await pool.query(
+    `SELECT * FROM novaclaw_workspaces WHERE active=FALSE ORDER BY created_at DESC`
+  );
+  return rows;
+}
+
 async function upsertWorkspace({ id, name, path: wsPath, color, description, sort_order }) {
   await pool.query(
     `INSERT INTO novaclaw_workspaces(id, name, path, color, description, sort_order)
@@ -263,6 +270,6 @@ module.exports = {
   stateGet, stateSet,
   insertMessage, getHistory, starMessage, exportMessages,
   getUserByTelegramChatId, getUserByUserId, verifyUserPassword, setUserPassword,
-  getWorkspaces, upsertWorkspace, deleteWorkspace,
+  getWorkspaces, getArchivedWorkspaces, upsertWorkspace, deleteWorkspace,
   getNotes, createNote, getActions, createAction,
 };

@@ -95,7 +95,7 @@ const MINIMAX_KEY   = process.env.ANTHROPIC_AUTH_TOKEN;
 const API_PORT      = parseInt(process.env.BRIDGE_PORT || '5679', 10);
 const TIMEOUT_MS    = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10);
 const WORK_DIR      = process.env.WORK_DIR || path.join(os.homedir(), '0Proyectos', 'MyClaw');
-const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_CLAUDE || '2', 10);
+const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_CLAUDE || '3', 10);
 
 // ============================================================
 // SEMÁFORO GLOBAL — máx N procesos claude simultáneos
@@ -656,6 +656,17 @@ const server = http.createServer(async (req, res) => {
     return jsonRes(res, 200, workspaces.all());
   }
 
+  // GET /api/workspaces/archived
+  if (req.method === 'GET' && req.url === '/api/workspaces/archived') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const archived = await db.getArchivedWorkspaces();
+      return jsonRes(res, 200, archived);
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
   // POST /api/workspaces  { id, name, path, color?, description? }
   if (req.method === 'POST' && req.url === '/api/workspaces') {
     if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
@@ -675,6 +686,24 @@ const server = http.createServer(async (req, res) => {
     if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
     try {
       const wsId = req.url.split('/')[3];
+      // Generar síntesis del tema a partir de los últimos mensajes antes de archivar
+      try {
+        const msgs = await db.getHistory({ workspace_id: wsId, limit: 6 });
+        if (msgs.length > 0) {
+          const preview = msgs
+            .filter(m => m.role === 'user')
+            .map(m => m.content.slice(0, 80))
+            .slice(-2)
+            .join(' / ');
+          if (preview) {
+            const ws = await db.getWorkspaces();
+            const target = ws.find(w => w.id === wsId);
+            if (target) {
+              await db.upsertWorkspace({ ...target, description: preview });
+            }
+          }
+        }
+      } catch {}
       await workspaces.remove(wsId);
       return jsonRes(res, 200, { ok: true });
     } catch (e) {

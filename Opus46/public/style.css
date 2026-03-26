@@ -421,6 +421,62 @@ body.dark .icon-sun { display: block; }
   margin-left: auto;
 }
 
+.ws-name-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ws-preview {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+  font-weight: 400;
+}
+
+.workspace-item.archived { opacity: 0.65; }
+.workspace-item.archived:hover { opacity: 1; }
+.workspace-item.archived.active { opacity: 1; }
+
+.ws-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  margin-top: 4px;
+}
+.ws-archive-toggle:hover { color: var(--text-secondary); }
+.ws-archive-toggle svg { transition: transform 0.15s; }
+.ws-archive-toggle.open svg { transform: rotate(90deg); }
+
+.ws-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Banner modo lectura */
+.readonly-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
 /* ── FOLDER TABS ────────────────────────────────────── */
 .folder-tabs {
   display: flex;

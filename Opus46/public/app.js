@@ -40,7 +40,7 @@ function getActiveWorkspace() {
   return workspaceList.find(w => w.id === activeWorkspaceId) || { id: 'myclaw', name: 'MyClaw', color: '#007AFF' };
 }
 
-function setActiveWorkspace(id) {
+function setActiveWorkspace(id, isArchived = false) {
   activeWorkspaceId = id;
   localStorage.setItem('active_workspace', id);
   updateWorkspaceUI();
@@ -48,47 +48,114 @@ function setActiveWorkspace(id) {
   renderedUuids.clear();
   historyBeforeTs = null;
   loadHistory();
+  // Modo lectura para archivados
+  const inputArea = document.getElementById('input-area');
+  const readonlyBanner = document.getElementById('readonly-banner');
+  if (isArchived) {
+    if (inputArea) inputArea.style.display = 'none';
+    if (!readonlyBanner) {
+      const banner = document.createElement('div');
+      banner.id = 'readonly-banner';
+      banner.className = 'readonly-banner';
+      banner.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Sesión archivada — solo lectura
+      `;
+      document.getElementById('chat-main')?.appendChild(banner);
+    }
+  } else {
+    if (inputArea) inputArea.style.display = '';
+    readonlyBanner?.remove();
+  }
   const emptyState = document.getElementById('empty-state');
   if (emptyState) chatEl.appendChild(emptyState);
 }
 
 async function loadWorkspaces() {
   try {
-    const res = await fetch('/api/workspaces', { headers: authHeaders() });
-    if (!res.ok) return;
-    workspaceList = await res.json();
-    // Ensure activeWorkspaceId is valid
-    if (!workspaceList.find(w => w.id === activeWorkspaceId)) {
+    const [resActive, resArchived] = await Promise.all([
+      fetch('/api/workspaces', { headers: authHeaders() }),
+      fetch('/api/workspaces/archived', { headers: authHeaders() }),
+    ]);
+    if (!resActive.ok) return;
+    workspaceList = await resActive.json();
+    const archived = resArchived.ok ? await resArchived.json() : [];
+    // Ensure activeWorkspaceId is valid (active OR archived)
+    const allIds = [...workspaceList, ...archived].map(w => w.id);
+    if (!allIds.includes(activeWorkspaceId)) {
       activeWorkspaceId = 'myclaw';
       localStorage.setItem('active_workspace', 'myclaw');
     }
-    renderWorkspaceList();
+    renderWorkspaceList(archived);
     updateWorkspaceUI();
+    // Restaurar modo lectura si el workspace activo es archivado
+    const isArchived = archived.some(w => w.id === activeWorkspaceId);
+    const inputArea = document.getElementById('input-area');
+    if (isArchived && inputArea) inputArea.style.display = 'none';
   } catch {}
 }
 
-function renderWorkspaceList() {
+let _archivedWorkspaces = [];
+
+function renderWorkspaceList(archived = []) {
+  _archivedWorkspaces = archived;
   const container = document.getElementById('workspace-list');
   if (!container) return;
   container.innerHTML = '';
+
+  // Activos
   for (const ws of workspaceList) {
-    const item = document.createElement('div');
-    item.className = `workspace-item${ws.id === activeWorkspaceId ? ' active' : ''}`;
-    item.dataset.id = ws.id;
-    item.innerHTML = `
-      <span class="ws-dot" style="background:${ws.color}"></span>
-      <span class="ws-name">${ws.name}</span>
-      ${ws.queue?.busy ? '<span class="ws-busy-dot"></span>' : ''}
-    `;
-    item.addEventListener('click', () => setActiveWorkspace(ws.id));
-    container.appendChild(item);
+    container.appendChild(buildWorkspaceItem(ws, false));
   }
-  // Add workspace button
+
+  // Botón añadir
   const addBtn = document.createElement('button');
   addBtn.className = 'ws-add-btn';
   addBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Nueva sesión';
   addBtn.addEventListener('click', showAddWorkspaceModal);
   container.appendChild(addBtn);
+
+  // Archivados (colapsados por defecto)
+  if (archived.length > 0) {
+    const hasArchivedActive = archived.some(w => w.id === activeWorkspaceId);
+    const toggle = document.createElement('div');
+    toggle.className = 'ws-archive-toggle';
+    toggle.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg> Archivados (${archived.length})`;
+    const archiveList = document.createElement('div');
+    archiveList.className = 'ws-archive-list';
+    let open = hasArchivedActive; // abrir si el activo es archivado
+    archiveList.style.display = open ? 'flex' : 'none';
+    toggle.classList.toggle('open', open);
+    toggle.addEventListener('click', () => {
+      open = !open;
+      archiveList.style.display = open ? 'flex' : 'none';
+      toggle.classList.toggle('open', open);
+    });
+    for (const ws of archived) {
+      archiveList.appendChild(buildWorkspaceItem(ws, true));
+    }
+    container.appendChild(toggle);
+    container.appendChild(archiveList);
+  }
+}
+
+function buildWorkspaceItem(ws, isArchived) {
+  const item = document.createElement('div');
+  item.className = `workspace-item${ws.id === activeWorkspaceId ? ' active' : ''}${isArchived ? ' archived' : ''}`;
+  item.dataset.id = ws.id;
+  const preview = isArchived && ws.description
+    ? `<span class="ws-preview">${ws.description.slice(0, 60)}</span>`
+    : '';
+  item.innerHTML = `
+    <span class="ws-dot" style="background:${isArchived ? '#999' : (ws.color || '#007AFF')}"></span>
+    <span class="ws-name-wrap">
+      <span class="ws-name">${ws.name}</span>
+      ${preview}
+    </span>
+    ${ws.queue?.busy ? '<span class="ws-busy-dot"></span>' : ''}
+  `;
+  item.addEventListener('click', () => setActiveWorkspace(ws.id, isArchived));
+  return item;
 }
 
 function updateWorkspaceUI() {
