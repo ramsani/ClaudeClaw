@@ -169,7 +169,9 @@ async function workerLoop() {
   }
 }
 
-// ── Sincronizar acciones de Nova con due_at vencido ───────────
+// ── Recordatorios de Nova con due_at vencido ─────────────────
+// Las acciones de Nova son recordatorios PARA EL USUARIO, no tareas
+// para que Claude ejecute. Solo se envía notificación Telegram directa.
 async function syncNovaActions() {
   try {
     const { rows } = await db.pool.query(`
@@ -178,15 +180,12 @@ async function syncNovaActions() {
       ORDER BY due_at ASC LIMIT 5
     `);
     for (const action of rows) {
-      await db.createTask({
-        type: 'once',
-        prompt: `Ejecuta esta acción pendiente y reporta el resultado: "${action.title}". Contexto: ${action.content || 'ninguno'}`,
-        notify_telegram: true,
-        telegram_chat_id: action.telegram_chat_id || ALLOWED_ID,
-        created_by: action.user_id || 'worker',
-      });
+      const chatId = action.telegram_chat_id || ALLOWED_ID;
+      await sendTelegram(chatId,
+        `⏰ *Recordatorio:* ${action.title}${action.content ? `\n\n${action.content}` : ''}`
+      );
       await db.pool.query(`UPDATE actions SET status='queued' WHERE id=$1`, [action.id]);
-      console.log(`[worker] acción Nova #${action.id} → tarea encolada`);
+      console.log(`[worker] recordatorio Nova #${action.id} enviado por Telegram`);
     }
   } catch(e) { console.error('[worker] syncNovaActions:', e.message); }
 }
