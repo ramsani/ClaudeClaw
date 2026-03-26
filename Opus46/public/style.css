@@ -346,6 +346,149 @@ body.dark .icon-sun { display: block; }
   gap: 8px;
 }
 
+/* ── SIDEBAR PANELS ─────────────────────────────────── */
+.sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+}
+
+.sidebar-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px 4px;
+}
+
+.sidebar-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sidebar-panel-action {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.sidebar-panel-action:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── WORKSPACE MODAL ────────────────────────────────── */
+.ws-modal-content {
+  width: 420px;
+}
+
+.ws-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 18px;
+}
+
+.ws-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.ws-field input[type="text"] {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.ws-field input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ws-field-hint {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.ws-color-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ws-color-row input[type="color"] {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  cursor: pointer;
+  background: none;
+}
+
+.ws-color-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ws-color-preset {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.1s;
+}
+.ws-color-preset:hover { transform: scale(1.2); border-color: var(--text-primary); }
+
+.ws-modal-error {
+  font-size: 0.82rem;
+  color: #FF3B30;
+  padding: 8px 10px;
+  background: rgba(255,59,48,0.08);
+  border-radius: 8px;
+  margin: 0;
+}
+
+.ws-modal-submit {
+  padding: 11px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.ws-modal-submit:hover { opacity: 0.88; }
+.ws-modal-submit:disabled { opacity: 0.5; cursor: default; }
+
 /* ── WORKSPACE LIST ─────────────────────────────────── */
 .workspace-list {
   display: flex;

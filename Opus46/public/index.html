@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="/style.css?v=9">
+  <link rel="stylesheet" href="/style.css?v=10">
 </head>
 <body>
 
@@ -98,15 +98,27 @@
         </button>
       </div>
 
-      <!-- Workspace switcher -->
-      <div class="sidebar-section-label">
-        Sesiones
-        <span id="workspace-badge" class="ws-badge">MyClaw</span>
+      <!-- Workspaces panel -->
+      <div class="sidebar-panel">
+        <div class="sidebar-panel-header">
+          <span class="sidebar-panel-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+            Sesiones
+          </span>
+          <button id="ws-new-btn" class="sidebar-panel-action" title="Nueva sesión">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+        <div id="workspace-list" class="workspace-list"></div>
       </div>
-      <div id="workspace-list" class="workspace-list"></div>
 
       <!-- Folder tabs -->
-      <div class="sidebar-section-label">Archivos</div>
+      <div class="sidebar-panel-header" style="padding: 0 16px 6px; margin-top: 4px;">
+        <span class="sidebar-panel-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+          Archivos
+        </span>
+      </div>
       <div class="folder-tabs">
         <button class="folder-tab active" data-dir="">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
@@ -260,6 +272,48 @@
   </div>
 </div>
 
+<!-- WORKSPACE MODAL -->
+<div id="workspace-modal" class="modal hidden">
+  <div class="modal-backdrop" id="workspace-backdrop"></div>
+  <div class="modal-content ws-modal-content">
+    <div class="modal-header">
+      <span>Nueva sesión</span>
+      <button id="workspace-modal-close" class="icon-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="ws-modal-body">
+      <label class="ws-field">
+        <span>Nombre</span>
+        <input type="text" id="ws-name" placeholder="Nova, Backend, Diseño…" autocomplete="off">
+      </label>
+      <label class="ws-field">
+        <span>Carpeta del proyecto</span>
+        <input type="text" id="ws-path" placeholder="/Users/papa/0Proyectos/Nova" autocomplete="off" spellcheck="false">
+        <span class="ws-field-hint">Path completo en el servidor</span>
+      </label>
+      <label class="ws-field">
+        <span>Color</span>
+        <div class="ws-color-row">
+          <input type="color" id="ws-color" value="#007AFF">
+          <div class="ws-color-presets">
+            <button class="ws-color-preset" data-color="#007AFF" style="background:#007AFF"></button>
+            <button class="ws-color-preset" data-color="#34C759" style="background:#34C759"></button>
+            <button class="ws-color-preset" data-color="#FF9500" style="background:#FF9500"></button>
+            <button class="ws-color-preset" data-color="#FF3B30" style="background:#FF3B30"></button>
+            <button class="ws-color-preset" data-color="#AF52DE" style="background:#AF52DE"></button>
+            <button class="ws-color-preset" data-color="#5AC8FA" style="background:#5AC8FA"></button>
+            <button class="ws-color-preset" data-color="#FF2D55" style="background:#FF2D55"></button>
+            <button class="ws-color-preset" data-color="#FFCC00" style="background:#FFCC00"></button>
+          </div>
+        </div>
+      </label>
+      <p id="ws-modal-error" class="ws-modal-error hidden"></p>
+      <button id="ws-modal-submit" class="ws-modal-submit">Abrir sesión</button>
+    </div>
+  </div>
+</div>
+
 <!-- TOAST CONTAINER -->
 <div id="toast-container"></div>
 
@@ -268,6 +322,6 @@
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 <script>Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';</script>
-<script src="/app.js?v=8"></script>
+<script src="/app.js?v=10"></script>
 </body>
 </html>

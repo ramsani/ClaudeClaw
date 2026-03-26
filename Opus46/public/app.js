@@ -108,12 +108,7 @@ function renderWorkspaceList(archived = []) {
     container.appendChild(buildWorkspaceItem(ws, false));
   }
 
-  // Botón añadir
-  const addBtn = document.createElement('button');
-  addBtn.className = 'ws-add-btn';
-  addBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Nueva sesión';
-  addBtn.addEventListener('click', showAddWorkspaceModal);
-  container.appendChild(addBtn);
+  // El botón añadir está en el header del panel (#ws-new-btn), no aquí
 
   // Archivados (colapsados por defecto)
   if (archived.length > 0) {
@@ -174,27 +169,80 @@ function updateWorkspaceUI() {
 }
 
 function showAddWorkspaceModal() {
-  const id    = prompt('ID del workspace (letras, números, guión):');
-  if (!id) return;
-  const name  = prompt('Nombre a mostrar:');
-  if (!name) return;
-  const wsPath = prompt('Path completo del proyecto (ej: /Users/papa/0Proyectos/Nova):');
-  if (!wsPath) return;
-  const color = prompt('Color (hex, ej: #34C759):', '#007AFF') || '#007AFF';
+  const modal = document.getElementById('workspace-modal');
+  const nameEl  = document.getElementById('ws-name');
+  const pathEl  = document.getElementById('ws-path');
+  const colorEl = document.getElementById('ws-color');
+  const errEl   = document.getElementById('ws-modal-error');
+  const submitBtn = document.getElementById('ws-modal-submit');
 
-  fetch('/api/workspaces', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ id, name, path: wsPath, color }),
-  }).then(async r => {
-    if (r.ok) {
-      showToast(`Workspace "${name}" creado`, 'success');
-      await loadWorkspaces();
-    } else {
-      const e = await r.json().catch(() => ({}));
-      showToast(e.error || 'Error creando workspace', 'error');
+  // Reset
+  nameEl.value = '';
+  pathEl.value = '';
+  colorEl.value = '#007AFF';
+  errEl.classList.add('hidden');
+  errEl.textContent = '';
+
+  modal.classList.remove('hidden');
+  setTimeout(() => nameEl.focus(), 50);
+
+  // Color presets
+  modal.querySelectorAll('.ws-color-preset').forEach(btn => {
+    btn.onclick = () => { colorEl.value = btn.dataset.color; };
+  });
+
+  // Close handlers
+  const close = () => modal.classList.add('hidden');
+  document.getElementById('workspace-backdrop').onclick = close;
+  document.getElementById('workspace-modal-close').onclick = close;
+
+  // Submit
+  submitBtn.onclick = async () => {
+    const name  = nameEl.value.trim();
+    const wsPath = pathEl.value.trim();
+    const color = colorEl.value;
+
+    if (!name || !wsPath) {
+      errEl.textContent = 'Nombre y carpeta son obligatorios';
+      errEl.classList.remove('hidden');
+      return;
     }
-  }).catch(() => showToast('Error de conexión', 'error'));
+
+    // Generar ID desde el nombre
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'ws-' + Date.now();
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Abriendo…';
+
+    try {
+      const r = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ id, name, path: wsPath, color }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        close();
+        showToast(`Sesión "${name}" abierta`, 'success');
+        await loadWorkspaces();
+        setActiveWorkspace(id, false);
+      } else {
+        errEl.textContent = data.error || 'Error al abrir sesión';
+        errEl.classList.remove('hidden');
+      }
+    } catch {
+      errEl.textContent = 'Error de conexión';
+      errEl.classList.remove('hidden');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Abrir sesión';
+    }
+  };
+
+  // Enter en los campos
+  [nameEl, pathEl].forEach(el => {
+    el.onkeydown = e => { if (e.key === 'Enter') submitBtn.click(); };
+  });
 }
 
 // ── HELPERS DOM ───────────────────────────────────────────────
@@ -264,6 +312,7 @@ function showApp() {
   loadWorkspaces().then(() => loadHistory());
   loadFiles();
   setupStatusPoller();
+  document.getElementById('ws-new-btn')?.addEventListener('click', showAddWorkspaceModal);
 }
 
 // ── WEBSOCKET ─────────────────────────────────────────────────
