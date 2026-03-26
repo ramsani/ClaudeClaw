@@ -336,12 +336,18 @@ function claudeProjectsKey(wsPath) {
 }
 
 // Construir args para claude según si tenemos sesión guardada
-function buildClaudeArgs(message, uuid, wsPath) {
+// options.skipMcp = true → --strict-mcp-config (saltar MCP servers, ~300ms vs ~3500ms)
+function buildClaudeArgs(message, uuid, wsPath, options = {}) {
   const base = [
     '--print', '--verbose',
     '--output-format', 'stream-json',
     '--dangerously-skip-permissions',
   ];
+
+  // Workspaces no-MyClaw: sin MCP servers = arranque rápido
+  if (options.skipMcp) {
+    base.push('--strict-mcp-config');
+  }
 
   if (uuid) {
     const key = claudeProjectsKey(wsPath || WORK_DIR);
@@ -359,15 +365,17 @@ async function askClaude(message, chatId, channel, messageUuid, workspace) {
   const wsId   = workspace?.id   || 'myclaw';
   const wsPath = workspace?.path || WORK_DIR;
   const uuid   = await session.loadSession(wsId);
+  // Solo MyClaw necesita MCP servers (Telegram, Calendar, etc.)
+  const skipMcp = wsId !== 'myclaw';
 
   try {
-    const { result } = await _spawnClaude(buildClaudeArgs(message, uuid, wsPath), chatId, channel, messageUuid, wsId, wsPath);
+    const { result } = await _spawnClaude(buildClaudeArgs(message, uuid, wsPath, { skipMcp }), chatId, channel, messageUuid, wsId, wsPath);
     return result;
   } catch (err) {
     if (err.code === 'session_not_found' && uuid) {
       console.warn(`[bridge] session no encontrada ws=${wsId}, limpiando y reintentando`);
       await session.clearSession(wsId);
-      const { result } = await _spawnClaude(buildClaudeArgs(message, null, wsPath), chatId, channel, messageUuid, wsId, wsPath);
+      const { result } = await _spawnClaude(buildClaudeArgs(message, null, wsPath, { skipMcp }), chatId, channel, messageUuid, wsId, wsPath);
       return result;
     }
     throw err;
@@ -1270,6 +1278,83 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── WORKER AUTÓNOMO ───────────────────────────────────────────
+
+  // POST /api/worker/tasks — encolar tarea
+  if (req.method === 'POST' && req.url === '/api/worker/tasks') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const userId = auth.getSessionUser(req) || 'admin';
+      const body = JSON.parse(await readBody(req));
+      if (!body.prompt) return jsonRes(res, 400, { error: 'prompt requerido' });
+      // type='timer' con delay_ms → normalizar a 'once' con run_at absoluto
+      if (body.type === 'timer' && body.delay_ms) {
+        body.run_at = new Date(Date.now() + parseInt(body.delay_ms));
+        body.type = 'once';
+      }
+      const task = await db.createTask({
+        ...body,
+        created_by: userId,
+        telegram_chat_id: body.telegram_chat_id || process.env.ALLOWED_ID,
+      });
+      return jsonRes(res, 201, { ok: true, task });
+    } catch(e) { return jsonRes(res, 500, { error: e.message }); }
+  }
+
+  // GET /api/worker/status — estado vivo del worker
+  if (req.method === 'GET' && req.url === '/api/worker/status') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const lastHbStr = await db.stateGet('worker_heartbeat');
+      const lastHb = lastHbStr ? parseInt(lastHbStr) : null;
+      const alive = !!(lastHb && (Date.now() - lastHb < 30_000));
+      const stats = await db.getWorkerStats();
+      return jsonRes(res, 200, {
+        alive,
+        lastHeartbeat: lastHb,
+        tasksToday: parseInt(stats.tasks_today),
+        tasksRunning: parseInt(stats.tasks_running),
+        tasksPending: parseInt(stats.tasks_pending),
+      });
+    } catch(e) { return jsonRes(res, 500, { error: e.message }); }
+  }
+
+  // GET /api/worker/tasks/:id — detalle de una tarea
+  if (req.method === 'GET' && /^\/api\/worker\/tasks\/\d+$/.test(req.url)) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const id = parseInt(req.url.split('/').pop());
+      const task = await db.getTask(id);
+      if (!task) return jsonRes(res, 404, { error: 'not found' });
+      return jsonRes(res, 200, task);
+    } catch(e) { return jsonRes(res, 500, { error: e.message }); }
+  }
+
+  // DELETE /api/worker/tasks/:id — cancelar tarea pending
+  if (req.method === 'DELETE' && /^\/api\/worker\/tasks\/\d+$/.test(req.url)) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const id = parseInt(req.url.split('/').pop());
+      await db.cancelTask(id);
+      return jsonRes(res, 200, { ok: true });
+    } catch(e) { return jsonRes(res, 500, { error: e.message }); }
+  }
+
+  // GET /api/worker/tasks — listar tareas
+  if (req.method === 'GET' && req.url.startsWith('/api/worker/tasks')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const params = new URL(req.url, 'http://x').searchParams;
+      const sessionUser = auth.getSessionUser(req);
+      const tasks = await db.listTasks({
+        status: params.get('status') || null,
+        created_by: (sessionUser && sessionUser !== 'admin') ? sessionUser : null,
+        limit: Math.min(parseInt(params.get('limit') || '20'), 100),
+      });
+      return jsonRes(res, 200, tasks);
+    } catch(e) { return jsonRes(res, 500, { error: e.message }); }
+  }
+
   // ── SERVIR ARCHIVOS ESTÁTICOS DE LA PWA ──────────────────────
 
   // Mapeo de rutas a archivos en public/
@@ -1308,6 +1393,14 @@ const server = http.createServer(async (req, res) => {
 
 // Iniciar WebSocket server
 ws.init(server);
+
+// Watchdog: detectar tareas stuck sin heartbeat cada 5 min
+setInterval(async () => {
+  try {
+    const stuck = await db.resetStuckTasks();
+    if (stuck.length) console.warn(`[watchdog] ${stuck.length} tareas stuck reseteadas`);
+  } catch {}
+}, 5 * 60_000);
 
 server.listen(API_PORT, '0.0.0.0', async () => {
   await pgInitPromise;

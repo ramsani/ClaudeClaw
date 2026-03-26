@@ -16,9 +16,10 @@
   <link rel="shortcut icon" href="/favicon.png" sizes="256x256">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="/style.css?v=13">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <link rel="stylesheet" href="/style.css?v=21">
 </head>
 <body>
 
@@ -62,6 +63,9 @@
         <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
         <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
       </button>
+      <button id="terminal-btn" class="icon-btn" title="Terminal">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+      </button>
       <button id="settings-btn" class="icon-btn" title="Ajustes">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
@@ -98,6 +102,12 @@
         <button id="search-btn-desktop" class="sidebar-action-btn" title="Buscar (⌘K)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <span>Buscar</span>
+        </button>
+        <button id="terminal-sidebar-btn" class="sidebar-tool-btn" title="Terminal (⌘`)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+        </button>
+        <button id="qc-open-btn" class="sidebar-tool-btn" title="Quick Capture (⌘⇧N)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>
       </div>
 
@@ -171,10 +181,34 @@
           <div id="notes-list" class="notes-list"></div>
         </div>
       </div>
+      <!-- Tareas Autónomas panel -->
+      <div class="sidebar-panel" id="panel-tasks">
+        <div class="sidebar-panel-header panel-toggle" data-panel="tasks">
+          <span class="sidebar-panel-title">
+            <svg class="panel-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px;opacity:.7"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Tareas Autónomas
+          </span>
+          <button id="task-new-btn" class="sidebar-panel-action" title="Nueva tarea">+</button>
+          <button id="task-refresh-btn" class="sidebar-panel-action" title="Actualizar">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+        </div>
+        <div class="panel-body" id="panel-body-tasks">
+          <div id="worker-status-pill" class="worker-status-pill">
+            <span id="worker-dot" class="worker-dot"></span>
+            <span id="worker-status-text" class="worker-status-text">Verificando...</span>
+          </div>
+          <div id="tasks-list" class="tasks-list"></div>
+        </div>
+      </div>
       </div><!-- /sidebar-scroll -->
 
       <!-- Sidebar footer -->
       <div class="sidebar-footer">
+        <button id="terminal-sidebar-btn" class="sidebar-icon-btn" title="Terminal (>_)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+        </button>
         <button id="theme-btn" class="sidebar-icon-btn" title="Cambiar tema">
           <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
           <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
@@ -261,9 +295,68 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <span>Notas</span>
     </button>
+    <button class="mobile-tab" data-panel="tasks">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span>Tareas</span>
+    </button>
   </nav>
 
 </div><!-- /#app -->
+
+<!-- TASK MODAL -->
+<div id="task-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span class="modal-title">Nueva tarea autónoma</span>
+      <button id="task-modal-close" class="modal-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="field-label">Instrucción para Claude</label>
+      <textarea id="task-prompt" class="task-prompt-input" rows="4"
+        placeholder="Ej: Revisa el estado del servidor y envíame un resumen..."></textarea>
+
+      <label class="field-label">Tipo</label>
+      <div class="task-type-tabs" id="task-type-tabs">
+        <button class="type-tab active" data-type="once">Una vez</button>
+        <button class="type-tab" data-type="timer">En X tiempo</button>
+        <button class="type-tab" data-type="cron">Recurrente</button>
+      </div>
+
+      <div id="type-once-fields" class="type-fields">
+        <label class="field-label">Cuándo</label>
+        <input type="datetime-local" id="task-run-at" class="field-input"/>
+        <span class="field-hint">Vacío = ejecutar ahora</span>
+      </div>
+
+      <div id="type-timer-fields" class="type-fields hidden">
+        <label class="field-label">En cuánto tiempo</label>
+        <div class="timer-row">
+          <input type="number" id="task-delay-num" class="field-input timer-num" min="1" value="1"/>
+          <select id="task-delay-unit" class="field-input timer-unit">
+            <option value="60000">minutos</option>
+            <option value="3600000">horas</option>
+            <option value="86400000">días</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="type-cron-fields" class="type-fields hidden">
+        <label class="field-label">Expresión cron</label>
+        <input type="text" id="task-cron-expr" class="field-input"
+          placeholder="0 9 * * 1  (lunes 9am)"/>
+        <span class="field-hint">Formato: minuto hora día mes día-semana</span>
+      </div>
+
+      <label class="field-label" style="margin-top:10px">Contexto adicional (opcional)</label>
+      <textarea id="task-context" class="task-prompt-input" rows="2"
+        placeholder="Instrucciones adicionales, archivos relevantes..."></textarea>
+    </div>
+    <div class="modal-footer">
+      <button id="task-modal-cancel" class="btn-secondary">Cancelar</button>
+      <button id="task-modal-submit" class="btn-primary">Encolar tarea</button>
+    </div>
+  </div>
+</div>
 
 <!-- FILE PREVIEW MODAL -->
 <div id="preview-modal" class="modal hidden">
@@ -372,6 +465,89 @@
   </div>
 </div>
 
+<!-- TERMINAL FLOATING WINDOW -->
+<div id="terminal-window" class="term-window hidden">
+  <div class="term-titlebar" id="term-titlebar">
+    <div class="term-shell-tabs">
+      <button class="term-shell-tab active" data-shell="bash">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+        bash
+      </button>
+      <button class="term-shell-tab" data-shell="claude">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 1 0 0 10A5 5 0 0 0 12 2z"/><path d="M2 20c0-4 4-7 10-7s10 3 10 7"/></svg>
+        claude
+      </button>
+    </div>
+    <span id="term-status" class="term-status"></span>
+    <button id="term-font-down" class="term-close-btn" title="Reducir fuente">A−</button>
+    <button id="term-font-up" class="term-close-btn" title="Aumentar fuente">A+</button>
+    <button id="terminal-minimize" class="term-close-btn" title="Minimizar">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+    <button id="terminal-close" class="term-close-btn" title="Cerrar">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div id="terminal-container" class="term-container"></div>
+  <!-- Resize handles — 8 directions -->
+  <div class="trh trh-n"  data-dir="n"></div>
+  <div class="trh trh-ne" data-dir="ne"></div>
+  <div class="trh trh-e"  data-dir="e"></div>
+  <div class="trh trh-se" data-dir="se"></div>
+  <div class="trh trh-s"  data-dir="s"></div>
+  <div class="trh trh-sw" data-dir="sw"></div>
+  <div class="trh trh-w"  data-dir="w"></div>
+  <div class="trh trh-nw" data-dir="nw"></div>
+</div>
+
+<!-- QUICKCAPTURE FLOATING WINDOW -->
+<div id="qc-window" class="qc-window hidden">
+  <div class="qc-titlebar" id="qc-titlebar">
+    <span class="qc-title">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      Quick capture
+    </span>
+    <button id="qc-font-down" class="qc-header-btn" title="Reducir fuente" style="font-size:0.65rem">A−</button>
+    <button id="qc-font-up" class="qc-header-btn" title="Aumentar fuente" style="font-size:0.65rem">A+</button>
+    <button id="qc-task-btn" class="qc-header-btn" title="Crear acción">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    </button>
+    <button id="qc-clear-btn" class="qc-header-btn danger" title="Nueva nota">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+    </button>
+    <button id="qc-minimize" class="qc-header-btn" title="Minimizar">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+    <button id="qc-close" class="qc-header-btn danger" title="Cerrar">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="qc-body">
+    <textarea id="qc-textarea" class="qc-textarea" placeholder="Captura una idea..."></textarea>
+    <button id="qc-recover-btn" class="qc-recover-btn hidden">↩ Recuperar nota anterior</button>
+  </div>
+  <div class="trh trh-n" data-dir="n"></div>
+  <div class="trh trh-ne" data-dir="ne"></div>
+  <div class="trh trh-e" data-dir="e"></div>
+  <div class="trh trh-se" data-dir="se"></div>
+  <div class="trh trh-s" data-dir="s"></div>
+  <div class="trh trh-sw" data-dir="sw"></div>
+  <div class="trh trh-w" data-dir="w"></div>
+  <div class="trh trh-nw" data-dir="nw"></div>
+</div>
+
+<!-- TERMINAL MINIMIZED CHIP -->
+<button id="term-chip" class="float-chip term-chip hidden">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+  <span>>_ bash</span>
+</button>
+
+<!-- QUICKCAPTURE MINIMIZED CHIP -->
+<button id="qc-chip" class="float-chip qc-chip hidden" title="Quick Capture (⌘⇧N)">
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+  <span>Nota</span>
+</button>
+
 <!-- TOAST CONTAINER -->
 <div id="toast-container"></div>
 
@@ -380,6 +556,8 @@
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 <script>Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';</script>
-<script src="/app.js?v=13"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script src="/app.js?v=21"></script>
 </body>
 </html>

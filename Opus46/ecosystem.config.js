@@ -75,5 +75,23 @@ module.exports = {
       out_file:   '/Users/papa/.pm2/logs/tunnel-out.log',
       merge_logs: true,
     },
+    {
+      name: 'worker',
+      script: './Opus46/lib/worker.js',
+      cwd: '/Users/papa/0Proyectos/ClaudeClaw',
+      exec_mode: 'fork',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '200M',
+      restart_delay: 5000,
+      max_restarts: 20,
+      kill_timeout: 8000,
+      env: { NODE_ENV: 'production' },
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      error_file: '/Users/papa/.pm2/logs/worker-error.log',
+      out_file:   '/Users/papa/.pm2/logs/worker-out.log',
+      merge_logs: true,
+    },
   ]
 };

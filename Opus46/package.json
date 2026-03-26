@@ -16,6 +16,8 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^9.6.0",
+    "cron-parser": "^3.5.0",
+    "node-pty": "^1.1.0",
     "pg": "^8.20.0",
     "ws": "^8.17.0"
   },

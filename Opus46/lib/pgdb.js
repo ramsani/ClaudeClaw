@@ -88,6 +88,34 @@ async function init() {
       CREATE INDEX IF NOT EXISTS idx_ncm_ws ON novaclaw_messages(workspace_id, created_at DESC);
     `);
 
+    // Tabla de tareas del worker autónomo
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS novaclaw_tasks (
+        id               SERIAL PRIMARY KEY,
+        type             VARCHAR(20)  DEFAULT 'once',
+        cron_expr        VARCHAR(50),
+        run_at           TIMESTAMPTZ  DEFAULT NOW(),
+        prompt           TEXT         NOT NULL,
+        context          TEXT,
+        workspace_id     VARCHAR(40)  DEFAULT 'myclaw',
+        status           VARCHAR(20)  DEFAULT 'pending',
+        result           TEXT,
+        error_msg        TEXT,
+        notify_telegram  BOOLEAN      DEFAULT TRUE,
+        telegram_chat_id VARCHAR(40),
+        created_by       VARCHAR(80),
+        created_at       TIMESTAMPTZ  DEFAULT NOW(),
+        started_at       TIMESTAMPTZ,
+        completed_at     TIMESTAMPTZ,
+        last_heartbeat   TIMESTAMPTZ,
+        retries          INT          DEFAULT 0,
+        max_retries      INT          DEFAULT 2,
+        worker_pid       INT
+      );
+      CREATE INDEX IF NOT EXISTS idx_nct_status_run ON novaclaw_tasks(status, run_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_nct_created_by ON novaclaw_tasks(created_by, created_at DESC);
+    `);
+
     console.log('[pgdb] PostgreSQL conectado y tablas listas');
   } finally {
     client.release();
@@ -331,6 +359,121 @@ async function updateAction({ id, title, content }) {
   return rows[0] || null;
 }
 
+// ── worker tasks ─────────────────────────────────────────────
+async function claimNextTask(workerPid) {
+  const { rows } = await pool.query(`
+    UPDATE novaclaw_tasks SET status='running', started_at=NOW(), last_heartbeat=NOW(), worker_pid=$1
+    WHERE id = (
+      SELECT id FROM novaclaw_tasks
+      WHERE status='pending' AND run_at <= NOW()
+      ORDER BY run_at ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING *`, [workerPid]);
+  return rows[0] || null;
+}
+
+async function heartbeatTask(id) {
+  await pool.query(`UPDATE novaclaw_tasks SET last_heartbeat=NOW() WHERE id=$1`, [id]);
+}
+
+async function completeTask(id, result) {
+  await pool.query(
+    `UPDATE novaclaw_tasks SET status='done', result=$1, completed_at=NOW() WHERE id=$2`,
+    [result, id]
+  );
+}
+
+async function failTask(id, errorMsg, canRetry) {
+  if (canRetry) {
+    await pool.query(
+      `UPDATE novaclaw_tasks SET status='pending', retries=retries+1, error_msg=$1,
+       run_at=NOW() + INTERVAL '30 seconds' WHERE id=$2`,
+      [errorMsg, id]
+    );
+  } else {
+    await pool.query(
+      `UPDATE novaclaw_tasks SET status='error', error_msg=$1, completed_at=NOW() WHERE id=$2`,
+      [errorMsg, id]
+    );
+  }
+}
+
+async function resetStuckTasks() {
+  const { rows } = await pool.query(`
+    UPDATE novaclaw_tasks
+    SET status = CASE WHEN retries < max_retries THEN 'pending' ELSE 'error' END,
+        retries = retries + 1,
+        error_msg = 'Worker timeout - heartbeat lost',
+        run_at = NOW() + INTERVAL '10 seconds'
+    WHERE status = 'running'
+      AND last_heartbeat < NOW() - INTERVAL '5 minutes'
+    RETURNING id, type, cron_expr
+  `);
+  return rows;
+}
+
+async function scheduleNextCronRun(id, cronExpr) {
+  // cron-parser v3 API
+  const parser = require('cron-parser');
+  const next = parser.parseExpression(cronExpr).next().toDate();
+  await pool.query(
+    `UPDATE novaclaw_tasks SET status='pending', run_at=$1, result=NULL, started_at=NULL,
+     completed_at=NULL, last_heartbeat=NULL WHERE id=$2`,
+    [next, id]
+  );
+}
+
+async function createTask({ type='once', cron_expr, run_at, prompt, context, workspace_id,
+                             notify_telegram=true, telegram_chat_id, created_by, max_retries=2 }) {
+  const { rows } = await pool.query(`
+    INSERT INTO novaclaw_tasks
+      (type, cron_expr, run_at, prompt, context, workspace_id, notify_telegram,
+       telegram_chat_id, created_by, max_retries)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [type, cron_expr||null, run_at||new Date(), prompt, context||null, workspace_id||'myclaw',
+     notify_telegram, telegram_chat_id||null, created_by||null, max_retries]
+  );
+  return rows[0];
+}
+
+async function getTask(id) {
+  const { rows } = await pool.query(`SELECT * FROM novaclaw_tasks WHERE id=$1`, [id]);
+  return rows[0] || null;
+}
+
+async function listTasks({ status, created_by, limit=20 } = {}) {
+  const conds = [], params = [];
+  if (status)     { conds.push(`status=$${params.length+1}`);     params.push(status); }
+  if (created_by) { conds.push(`created_by=$${params.length+1}`); params.push(created_by); }
+  params.push(limit);
+  const where = conds.length ? 'WHERE '+conds.join(' AND ') : '';
+  const { rows } = await pool.query(
+    `SELECT * FROM novaclaw_tasks ${where} ORDER BY created_at DESC LIMIT $${params.length}`,
+    params
+  );
+  return rows;
+}
+
+async function cancelTask(id) {
+  await pool.query(
+    `UPDATE novaclaw_tasks SET status='cancelled', completed_at=NOW() WHERE id=$1 AND status='pending'`,
+    [id]
+  );
+}
+
+async function getWorkerStats() {
+  const { rows } = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE DATE(completed_at) = CURRENT_DATE AND status='done') AS tasks_today,
+      COUNT(*) FILTER (WHERE status='running')  AS tasks_running,
+      COUNT(*) FILTER (WHERE status='pending')  AS tasks_pending
+    FROM novaclaw_tasks
+  `);
+  return rows[0];
+}
+
 module.exports = {
   pool, init,
   stateGet, stateSet,
@@ -338,4 +481,6 @@ module.exports = {
   getUserByTelegramChatId, getUserByUserId, verifyUserPassword, setUserPassword, createUser, listUsers,
   getWorkspaces, getArchivedWorkspaces, upsertWorkspace, deleteWorkspace,
   getNotes, createNote, getActions, createAction, updateNote, updateAction,
+  claimNextTask, heartbeatTask, completeTask, failTask, resetStuckTasks,
+  scheduleNextCronRun, createTask, getTask, listTasks, cancelTask, getWorkerStats,
 };
