@@ -83,8 +83,8 @@ body.dark .icon-sun { display: block; }
 }
 
 .login-mascot {
-  width: 96px;
-  height: 96px;
+  width: 116px;
+  height: 116px;
   object-fit: contain;
   animation: mascot-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
