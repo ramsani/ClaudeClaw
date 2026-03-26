@@ -1,19 +1,19 @@
 'use strict';
-const db = require('./db');
+const pgdb = require('./pgdb');
 
 const KEY = 'claude_session_uuid';
 
-function loadSession() {
-  const uuid = db.stateGet(KEY);
+async function loadSession(userId = '') {
+  const uuid = await pgdb.stateGet(KEY, userId);
   return uuid || null;
 }
 
-function saveSession(uuid) {
-  if (uuid) db.stateSet(KEY, uuid);
+async function saveSession(uuid, userId = '') {
+  if (uuid) await pgdb.stateSet(KEY, uuid, userId);
 }
 
-function clearSession() {
-  db.stateSet(KEY, '');
+async function clearSession(userId = '') {
+  await pgdb.stateSet(KEY, '', userId);
 }
 
 module.exports = { loadSession, saveSession, clearSession };

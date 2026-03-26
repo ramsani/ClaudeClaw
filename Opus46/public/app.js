@@ -3,6 +3,8 @@
 
 // ── CONFIGURACIÓN ──────────────────────────────────────────────
 const SLASH_COMMANDS = [
+  { cmd: '/nota',       desc: 'Guardar nota en Nova  →  /nota Título' },
+  { cmd: '/accion',     desc: 'Crear acción en Nova  →  /accion Título' },
   { cmd: '/ping',       desc: 'Verificar que el bridge responde' },
   { cmd: '/fecha',      desc: 'Fecha actual' },
   { cmd: '/hora',       desc: 'Hora actual' },
@@ -28,6 +30,7 @@ let audioChunks = [];
 let slashSelectedIdx = -1;
 let historyBeforeTs = null;
 let loadingHistory = false;
+const renderedUuids = new Set();
 
 // ── HELPERS DOM ───────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -39,8 +42,8 @@ const sendBtn       = $('send-btn');
 const statusDot     = $('status-dot');
 const typingEl      = $('typing-indicator');
 const typingText    = $('typing-text');
-const mascotThink   = $('mascot-thinking');
-const mascotIcon    = $('mascot-icon');
+const mascotThink   = $('mascot-thinking');  // removed in new HTML, kept for compat
+const mascotIcon    = $('mascot-icon');        // removed in new HTML, kept for compat
 const filesList     = $('files-list');
 const filesSidebar  = $('files-sidebar');
 const slashPopup    = $('slash-popup');
@@ -60,11 +63,11 @@ function authHeaders() {
 }
 
 // ── LOGIN ─────────────────────────────────────────────────────
-async function tryLogin(password) {
+async function tryLogin(username, password) {
   const res = await fetch('/api/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ username, password }),
   });
   return res.ok;
 }
@@ -134,22 +137,20 @@ function handleWSEvent(ev) {
   switch (ev.type) {
     case 'message':
       appendMessage(ev);
+      if (ev.role === 'user') scrollToBottom(); // siempre ver el propio mensaje
       if (ev.role === 'assistant' && soundEnabled) playChime();
       break;
     case 'typing':
       if (ev.active) {
+        chatEl.appendChild(typingEl);
         typingEl.classList.remove('hidden');
-        mascotThink?.classList.add('thinking');
-        mascotIcon?.classList.add('thinking');
       } else {
         typingEl.classList.add('hidden');
-        mascotThink?.classList.remove('thinking');
-        mascotIcon?.classList.remove('thinking');
       }
       break;
     case 'thinking':
+      chatEl.appendChild(typingEl);
       typingEl.classList.remove('hidden');
-      if (typingText) typingText.textContent = `Claude: ${ev.label || ev.tool}`;
       break;
     case 'error':
       handleWSError(ev);
@@ -167,8 +168,12 @@ function handleWSError(ev) {
 }
 
 function setStatus(s) {
-  statusDot.className = `status-dot ${s}`;
-  statusDot.title = { online: 'Conectado', offline: 'Desconectado', connecting: 'Conectando...' }[s] || s;
+  const label = { online: 'Conectado', offline: 'Desconectado', connecting: 'Conectando...' }[s] || s;
+  [statusDot, $('status-dot-desktop')].forEach(dot => {
+    if (!dot) return;
+    dot.className = `status-dot ${s}`;
+    dot.title = label;
+  });
 }
 
 // ── HISTORIAL ─────────────────────────────────────────────────
@@ -181,15 +186,23 @@ async function loadHistory(before = null, search = null) {
     if (search) url += `&q=${encodeURIComponent(search)}`;
     const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) return;
-    const msgs = await res.json();
-    if (!before) chatEl.innerHTML = ''; // reset si es primera carga
-    msgs.forEach(m => appendMessage(m, true)); // prepend=true para historial
-    if (msgs.length > 0 && !before) {
-      historyBeforeTs = msgs[0].created_at;
+    const msgs = await res.json(); // llega en orden DESC (más nuevo primero)
+
+    if (!before) {
+      // Carga inicial: invertir para tener ASC (más antiguo primero) y append normal
+      chatEl.innerHTML = '';
+      renderedUuids.clear();
+      msgs.slice().reverse().forEach(m => appendMessage(m, false));
+      // historyBeforeTs = timestamp del más antiguo cargado (último en DESC = index final)
+      historyBeforeTs = msgs.length > 0 ? msgs[msgs.length - 1].created_at : null;
       scrollToBottom();
-    }
-    if (msgs.length > 0 && before) {
-      historyBeforeTs = msgs[0].created_at;
+    } else {
+      if (msgs.length === 0) {
+        historyBeforeTs = null; // no hay más historial
+      } else {
+        msgs.forEach(m => appendMessage(m, true)); // prepend en orden DESC = resultado correcto
+        historyBeforeTs = msgs[msgs.length - 1].created_at; // más antiguo del batch
+      }
     }
   } catch {}
   loadingHistory = false;
@@ -197,6 +210,15 @@ async function loadHistory(before = null, search = null) {
 
 // ── RENDERIZAR MENSAJES ───────────────────────────────────────
 function appendMessage(msg, prepend = false) {
+  // Evitar duplicados (el mismo mensaje puede llegar por WS e historial)
+  if (msg.uuid) {
+    if (renderedUuids.has(msg.uuid)) return;
+    renderedUuids.add(msg.uuid);
+  }
+  // Ocultar empty state al primer mensaje
+  const emptyState = document.getElementById('empty-state');
+  if (emptyState) emptyState.remove();
+
   const row = document.createElement('div');
   row.className = `msg-row ${msg.role}`;
   row.dataset.uuid = msg.uuid || '';
@@ -214,11 +236,11 @@ function appendMessage(msg, prepend = false) {
         if (pre.querySelector('.copy-btn')) return;
         const btn = document.createElement('button');
         btn.className = 'copy-btn';
-        btn.textContent = '📋';
+        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
         btn.addEventListener('click', () => {
-          navigator.clipboard.writeText(pre.textContent.replace(/📋|✅/g, '').trim());
-          btn.textContent = '✅';
-          setTimeout(() => btn.textContent = '📋', 2000);
+          navigator.clipboard.writeText(pre.textContent.trim());
+          btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+          setTimeout(() => { btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>'; }, 2000);
         });
         pre.appendChild(btn);
       });
@@ -230,7 +252,8 @@ function appendMessage(msg, prepend = false) {
   // Meta (hora + canal)
   const meta = document.createElement('div');
   meta.className = 'bubble-meta';
-  const ts = msg.created_at ? new Date(msg.created_at).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '';
+  const tsDate = msg.created_at ? new Date(msg.created_at) : null;
+  const ts = tsDate && !isNaN(tsDate) ? tsDate.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '';
   meta.innerHTML = `<span>${ts}</span>`;
   if (msg.channel && msg.channel !== 'pwa') {
     const badge = document.createElement('span');
@@ -240,17 +263,25 @@ function appendMessage(msg, prepend = false) {
   }
   if (msg.starred) {
     const star = document.createElement('span');
-    star.textContent = '⭐';
+    star.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="#FF9F0A" stroke="#FF9F0A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
     meta.appendChild(star);
   }
 
   // Acciones en hover
   const actions = document.createElement('div');
   actions.className = 'bubble-actions';
+  const svgCopy = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+  const svgStarFill = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+  const svgStar = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+  const svgNote = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+  const svgCheck = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  const svgReturn = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>';
   actions.innerHTML = `
-    <button class="act-copy">📋 Copiar</button>
-    <button class="act-star">${msg.starred ? '★ Guardado' : '☆ Guardar'}</button>
-    ${msg.role === 'assistant' ? '<button class="act-continue">↩️ Continuar</button>' : ''}
+    <button class="act-copy">${svgCopy} Copiar</button>
+    <button class="act-star">${msg.starred ? svgStarFill + ' Guardado' : svgStar + ' Guardar'}</button>
+    ${msg.role === 'assistant' ? `<button class="act-nova-note">${svgNote} Nota</button>` : ''}
+    ${msg.role === 'assistant' ? `<button class="act-nova-action">${svgCheck} Acción</button>` : ''}
+    ${msg.role === 'assistant' ? `<button class="act-continue">${svgReturn} Continuar</button>` : ''}
   `;
   actions.querySelector('.act-copy').addEventListener('click', () => {
     navigator.clipboard.writeText(msg.content || '');
@@ -259,13 +290,29 @@ function appendMessage(msg, prepend = false) {
   actions.querySelector('.act-star').addEventListener('click', async (e) => {
     const starred = !msg.starred;
     msg.starred = starred;
-    e.target.textContent = starred ? '★ Guardado' : '☆ Guardar';
+    e.target.innerHTML = starred ? svgStarFill + ' Guardado' : svgStar + ' Guardar';
     await fetch(`/api/messages/${msg.uuid}/star`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ starred }),
     });
   });
+  const noteBtn = actions.querySelector('.act-nova-note');
+  if (noteBtn) {
+    noteBtn.addEventListener('click', async (e) => {
+      e.target.innerHTML = svgCheck + ' Guardando…';
+      await saveToNova('nota', extractTitle(msg.content || ''), msg.content || '');
+      e.target.innerHTML = svgNote + ' Nota';
+    });
+  }
+  const actionBtn = actions.querySelector('.act-nova-action');
+  if (actionBtn) {
+    actionBtn.addEventListener('click', async (e) => {
+      e.target.innerHTML = svgCheck + ' Guardando…';
+      await saveToNova('accion', extractTitle(msg.content || ''), msg.content || '');
+      e.target.innerHTML = svgCheck + ' Acción';
+    });
+  }
   const continueBtn = actions.querySelector('.act-continue');
   if (continueBtn) {
     continueBtn.addEventListener('click', () => sendMessage('continúa donde te quedaste'));
@@ -279,16 +326,30 @@ function appendMessage(msg, prepend = false) {
   if (msg.role === 'assistant' && msg.content && /[^.!?…"')\]}\w]$/.test(msg.content.trimEnd())) {
     const cb = document.createElement('button');
     cb.className = 'continue-btn';
-    cb.textContent = '↩️ Continuar respuesta';
+    cb.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg> Continuar respuesta';
     cb.addEventListener('click', () => { cb.remove(); sendMessage('continúa donde te quedaste'); });
     row.appendChild(cb);
   }
+
+  // Click en el bubble → mostrar/ocultar acciones (cierra los demás)
+  bubble.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, code, pre')) return; // no interferir con botones/links
+    const isOpen = row.classList.contains('actions-open');
+    chatEl.querySelectorAll('.msg-row.actions-open').forEach(r => r.classList.remove('actions-open'));
+    if (!isOpen) row.classList.add('actions-open');
+  });
 
   const wasAtBottom = isAtBottom();
   if (prepend) {
     chatEl.insertBefore(row, chatEl.firstChild);
   } else {
-    chatEl.appendChild(row);
+    // Insertar antes del typing indicator si está visible
+    const typing = document.getElementById('typing-indicator');
+    if (typing && typing.parentNode === chatEl) {
+      chatEl.insertBefore(row, typing);
+    } else {
+      chatEl.appendChild(row);
+    }
     if (wasAtBottom) scrollToBottom();
   }
 }
@@ -316,22 +377,77 @@ function scrollToBottom() {
 
 // Scroll infinito hacia arriba para cargar más historial
 chatEl.addEventListener('scroll', () => {
-  if (chatEl.scrollTop < 80 && historyBeforeTs && !loadingHistory) {
+  if (chatEl.scrollTop < 100 && historyBeforeTs && !loadingHistory) {
     const prevH = chatEl.scrollHeight;
     loadHistory(historyBeforeTs).then(() => {
-      // Mantener posición de scroll
-      chatEl.scrollTop = chatEl.scrollHeight - prevH;
+      const added = chatEl.scrollHeight - prevH;
+      if (added > 0) chatEl.scrollTop = added; // mantener posición visual
     });
   }
 });
 
 // ── ENVIAR MENSAJE ────────────────────────────────────────────
+// ── GUARDAR EN NOVA ───────────────────────────────────────────
+function extractTitle(content) {
+  // 1. Buscar primer encabezado markdown
+  const heading = content.match(/^#{1,3}\s+(.+)/m);
+  if (heading) return heading[1].trim().slice(0, 160);
+
+  // 2. Buscar primera línea con contenido real (≥20 chars)
+  const lines = content.split('\n').map(l => l.replace(/^[*_`#>\-•\d.]+\s*/, '').trim()).filter(Boolean);
+  for (const line of lines) {
+    if (line.length >= 20) {
+      // Cortar en punto o coma si es muy larga
+      const cut = line.length > 120 ? line.slice(0, 120).replace(/[,;]\s*\S+$/, '').replace(/\s+\S+$/, '') + '…' : line;
+      return cut;
+    }
+  }
+  return lines[0]?.slice(0, 120) || 'Sin título';
+}
+
+async function saveToNova(type, title, content) {
+  const endpoint = type === 'nota' ? '/api/nova/note' : '/api/nova/action';
+  const body = type === 'nota'
+    ? { title, content, note_type: 'general' }
+    : { title, content, action_type: 'task' };
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('error');
+    const label = type === 'nota' ? 'Nota guardada en Nova' : 'Acción creada en Nova';
+    showToast(label, 'success');
+  } catch {
+    showToast('Error guardando en Nova', 'error');
+  }
+}
+
 async function sendMessage(text) {
   const msg = (text || inputEl.value).trim();
   if (!msg) return;
+
+  // Slash commands locales: /nota y /accion
+  const notaMatch  = msg.match(/^\/nota\s+(.+)/si);
+  const accionMatch = msg.match(/^\/accion\s+(.+)/si);
+  if (notaMatch) {
+    if (!text) inputEl.value = '';
+    autoResizeTextarea();
+    await saveToNova('nota', notaMatch[1].split('\n')[0].slice(0, 200), notaMatch[1]);
+    return;
+  }
+  if (accionMatch) {
+    if (!text) inputEl.value = '';
+    autoResizeTextarea();
+    await saveToNova('accion', accionMatch[1].split('\n')[0].slice(0, 200), accionMatch[1]);
+    return;
+  }
+
   if (!text) inputEl.value = '';
   autoResizeTextarea();
   sendBtn.disabled = true;
+  scrollToBottom(); // siempre ir al fondo al enviar
 
   try {
     const res = await fetch('/api/chat', {
@@ -357,12 +473,15 @@ async function sendMessage(text) {
 sendBtn.addEventListener('click', () => sendMessage());
 
 inputEl.addEventListener('keydown', e => {
-  // Ctrl+Enter → enviar
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault(); sendMessage(); return;
+  // Enter sin Shift → enviar; Shift+Enter → salto de línea
+  if (e.key === 'Enter' && !e.shiftKey) {
+    // Si slash popup está abierto, Enter selecciona ítem (manejado abajo)
+    if (!slashPopup.classList.contains('hidden')) {
+      // handled below
+    } else {
+      e.preventDefault(); sendMessage(); return;
+    }
   }
-  // Enter sin shift → enviar (solo en mobile o si se prefiere)
-  // En desktop mantenemos Enter = salto de línea para comodidad
 
   // Slash autocomplete navigation
   if (!slashPopup.classList.contains('hidden')) {
@@ -549,7 +668,7 @@ function renderFilesList(items, dir) {
   if (dir) {
     const back = document.createElement('div');
     back.className = 'file-item dir-item';
-    back.textContent = '⬆️ ..';
+    back.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> ..`;
     back.addEventListener('click', () => {
       const parent = dir.split('/').slice(0, -1).join('/');
       loadFiles(parent);
@@ -561,16 +680,16 @@ function renderFilesList(items, dir) {
     const el = document.createElement('div');
     el.className = `file-item${item.isDir ? ' dir-item' : ''}`;
 
-    const icon = item.isDir ? '📁' : fileIcon(item.type);
+    const iconSvg = item.isDir ? fileIconSvg('dir') : fileIconSvg(item.type);
     el.innerHTML = `
-      <div class="file-item-name">${icon} ${escapeHtml(item.name)}</div>
+      <div class="file-item-name">${iconSvg} ${escapeHtml(item.name)}</div>
       <div class="file-item-meta">${item.sizeHuman || ''} ${item.modified ? '· ' + new Date(item.modified).toLocaleDateString('es-MX') : ''}</div>
       ${!item.isDir ? `<div class="file-item-actions">
-        <button class="act-preview">👁️ Ver</button>
-        <button class="act-download">⬇️</button>
-        <button class="act-share">🔗</button>
-        <button class="act-send">💬</button>
-        <button class="act-delete">🗑️</button>
+        <button class="act-preview" title="Ver"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        <button class="act-download" title="Descargar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+        <button class="act-share" title="Compartir"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+        <button class="act-send" title="Enviar a Claude"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+        <button class="act-delete" title="Eliminar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg></button>
       </div>` : ''}
     `;
 
@@ -596,6 +715,18 @@ function fileIcon(type) {
   return { image: '🖼️', pdf: '📄', audio: '🎵', video: '🎬', text: '📝', dir: '📁' }[type] || '📎';
 }
 
+function fileIconSvg(type) {
+  const icons = {
+    image: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+    pdf:   `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`,
+    audio: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+    video: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>`,
+    text:  `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`,
+    dir:   `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
+  };
+  return icons[type] || `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`;
+}
+
 async function previewFile(item) {
   previewTitle.textContent = item.name;
   previewBody.innerHTML = '<div class="loading-msg">Cargando...</div>';
@@ -619,7 +750,7 @@ async function previewFile(item) {
   } else if (item.type === 'audio') {
     previewBody.innerHTML = `<audio controls src="/api/files/inline?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}" style="width:100%"></audio>`;
   } else {
-    previewBody.innerHTML = `<div class="loading-msg">No hay preview disponible para este tipo de archivo.<br><br><button onclick="downloadFile(${JSON.stringify(item).replace(/"/g,'&quot;')})">⬇️ Descargar</button></div>`;
+    previewBody.innerHTML = `<div class="loading-msg">No hay preview disponible para este tipo de archivo.<br><br><button onclick="downloadFile(${JSON.stringify(item).replace(/"/g,'&quot;')})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Descargar</button></div>`;
   }
 
   $('preview-download').onclick = () => downloadFile(item);
@@ -689,16 +820,14 @@ searchInput.addEventListener('input', debounce(() => {
   else if (!q) loadHistory();
 }, 400));
 
-$('theme-btn').addEventListener('click', () => {
-  document.body.classList.toggle('light');
-  $('theme-btn').textContent = document.body.classList.contains('light') ? '🌚' : '🌙';
-  localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
+document.querySelectorAll('#theme-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.body.classList.toggle('dark');
+    localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+  });
 });
 
-$('settings-btn').addEventListener('click', () => {
-  settingsModal.classList.remove('hidden');
-  updateSettingsPanel();
-});
+// settings-btn wired via querySelectorAll below (supports header + sidebar instances)
 $('settings-close').addEventListener('click', () => settingsModal.classList.add('hidden'));
 $('settings-backdrop').addEventListener('click', () => settingsModal.classList.add('hidden'));
 
@@ -782,6 +911,76 @@ function showToast(msg, type = '') {
   setTimeout(() => el.remove(), 3000);
 }
 
+// ── SIDEBAR COLLAPSE / RESIZE ─────────────────────────────────
+(function() {
+  const sidebar    = $('files-sidebar');
+  const collapseBtn = $('sidebar-collapse-btn');
+  const expandBtn  = $('sidebar-expand-btn');
+  const handle     = $('sidebar-resize-handle');
+  if (!sidebar || !collapseBtn) return;
+
+  const STORAGE_KEY_W = 'sidebar-width';
+  const STORAGE_KEY_C = 'sidebar-collapsed';
+
+  // Restaurar ancho guardado
+  const savedW = localStorage.getItem(STORAGE_KEY_W);
+  if (savedW) sidebar.style.width = savedW + 'px';
+
+  // Restaurar estado colapsado
+  if (localStorage.getItem(STORAGE_KEY_C) === '1') {
+    sidebar.classList.add('collapsed');
+    expandBtn?.classList.remove('hidden');
+    collapseBtn.style.display = 'none';
+  }
+
+  function collapse() {
+    sidebar.classList.add('collapsed');
+    expandBtn?.classList.remove('hidden');
+    collapseBtn.style.display = 'none';
+    localStorage.setItem(STORAGE_KEY_C, '1');
+  }
+  function expand() {
+    sidebar.classList.remove('collapsed');
+    expandBtn?.classList.add('hidden');
+    collapseBtn.style.display = '';
+    localStorage.setItem(STORAGE_KEY_C, '0');
+  }
+
+  collapseBtn.addEventListener('click', collapse);
+  expandBtn?.addEventListener('click', expand);
+
+  // ── Drag to resize ──
+  if (!handle) return;
+  let startX, startW;
+
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.offsetWidth;
+    handle.classList.add('dragging');
+
+    function onMove(e) {
+      const newW = Math.min(480, Math.max(160, startW + e.clientX - startX));
+      sidebar.style.width = newW + 'px';
+    }
+    function onUp() {
+      handle.classList.remove('dragging');
+      localStorage.setItem(STORAGE_KEY_W, sidebar.offsetWidth);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
+
+// Cerrar acciones al hacer click fuera de un mensaje
+document.addEventListener('click', e => {
+  if (!e.target.closest('.msg-row')) {
+    chatEl.querySelectorAll('.msg-row.actions-open').forEach(r => r.classList.remove('actions-open'));
+  }
+});
+
 // ── KEYBOARD SHORTCUTS ────────────────────────────────────────
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -800,8 +999,9 @@ document.addEventListener('keydown', e => {
 // ── LOGIN FORM ────────────────────────────────────────────────
 $('login-form').addEventListener('submit', async e => {
   e.preventDefault();
+  const username = $('username-input')?.value || '';
   const password = $('password-input').value;
-  const ok = await tryLogin(password);
+  const ok = await tryLogin(username, password);
   if (ok) {
     showApp();
   } else {
@@ -817,9 +1017,43 @@ function debounce(fn, ms) {
 }
 
 // ── THEME RESTORE ─────────────────────────────────────────────
-if (localStorage.getItem('theme') === 'light') {
-  document.body.classList.add('light');
-  $('theme-btn').textContent = '🌚';
+(function() {
+  const savedTheme = localStorage.getItem('theme');
+  if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    document.body.classList.add('dark');
+  }
+})();
+
+// ── SETTINGS / SEARCH — wire desktop sidebar duplicates ───────
+const searchBtnDesktop = $('search-btn-desktop');
+if (searchBtnDesktop) {
+  searchBtnDesktop.addEventListener('click', () => {
+    searchBar.classList.toggle('hidden');
+    if (!searchBar.classList.contains('hidden')) searchInput.focus();
+  });
+}
+
+// settings-btn: there may be two (header + sidebar footer) — both wired via querySelectorAll
+document.querySelectorAll('#settings-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    settingsModal.classList.remove('hidden');
+    updateSettingsPanel();
+  });
+});
+
+// ── MOBILE TABS ───────────────────────────────────────────────
+const mobileTabs = $('mobile-tabs');
+if (mobileTabs) {
+  mobileTabs.querySelectorAll('.mobile-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mobileTabs.querySelectorAll('.mobile-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const panel = btn.dataset.panel;
+      const chatMain = $('chat-main');
+      chatMain.classList.toggle('mobile-hidden', panel !== 'chat');
+      filesSidebar.classList.toggle('mobile-shown', panel === 'files');
+    });
+  });
 }
 
 // ── SERVICE WORKER ────────────────────────────────────────────

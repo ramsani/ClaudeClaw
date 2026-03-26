@@ -5,100 +5,198 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="ClaudeClaw">
-  <meta name="theme-color" content="#0d1117">
-  <title>ClaudeClaw</title>
+  <meta name="apple-mobile-web-app-title" content="NovaClaw">
+  <meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <title>NovaClaw</title>
   <link rel="manifest" href="/manifest.json">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <link rel="icon" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/style.css">
-  <!-- Markdown + Syntax highlighting -->
+  <link rel="apple-touch-icon" href="/icons/icon-180.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/icons/icon-16.png">
+  <link rel="shortcut icon" href="/favicon.png" sizes="64x64">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="/style.css?v=6">
 </head>
-<body class="dark">
+<body>
 
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
   <div class="login-card">
-    <img src="/icons/mascot.png" alt="ClaudeClaw" class="login-mascot" onerror="this.style.display='none'">
-    <h1>ClaudeClaw</h1>
+    <div class="login-brand">
+      <img src="/icons/icon-192.png" class="login-mascot" alt="NovaClaw">
+    </div>
+    <h1 class="login-title">NovaClaw</h1>
     <p class="login-sub">Tu agente Claude, desde cualquier dispositivo</p>
     <form id="login-form">
+      <input type="text" id="username-input" placeholder="Usuario" autocomplete="username" required>
       <input type="password" id="password-input" placeholder="Contraseña" autocomplete="current-password" required>
       <button type="submit">Entrar</button>
     </form>
-    <p id="login-error" class="error-msg hidden">Contraseña incorrecta</p>
+    <p id="login-error" class="error-msg hidden">Credenciales incorrectas</p>
   </div>
 </div>
 
 <!-- MAIN APP -->
 <div id="app" class="hidden">
 
-  <!-- HEADER -->
+  <!-- MOBILE HEADER (hidden on desktop) -->
   <header id="header">
     <div class="header-left">
-      <button id="files-toggle" class="icon-btn" title="Archivos" aria-label="Archivos">📁</button>
-      <img src="/icons/mascot.png" alt="" class="mascot-header" id="mascot-icon" onerror="this.style.display='none'">
-      <span class="app-title">ClaudeClaw</span>
+      <button id="files-toggle" class="icon-btn" title="Archivos" aria-label="Archivos">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+      </button>
+      <span class="app-title">NovaClaw</span>
     </div>
     <div class="header-right">
       <span id="status-dot" class="status-dot offline" title="Desconectado"></span>
-      <button id="search-btn" class="icon-btn" title="Buscar">🔍</button>
-      <button id="theme-btn" class="icon-btn" title="Tema">🌙</button>
-      <button id="settings-btn" class="icon-btn" title="Ajustes">⚙️</button>
+      <button id="search-btn" class="icon-btn" title="Buscar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      </button>
+      <button id="theme-btn" class="icon-btn" title="Tema">
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+      <button id="settings-btn" class="icon-btn" title="Ajustes">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </div>
   </header>
 
-  <!-- SEARCH BAR (oculto por defecto) -->
+  <!-- SEARCH BAR -->
   <div id="search-bar" class="hidden">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:var(--text-dim)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
     <input type="text" id="search-input" placeholder="Buscar en historial..." autocomplete="off">
-    <button id="search-close" class="icon-btn">✕</button>
+    <button id="search-close" class="icon-btn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
   </div>
 
-  <!-- LAYOUT PRINCIPAL -->
+  <!-- MAIN LAYOUT -->
   <div id="layout">
 
-    <!-- SIDEBAR FILES (desktop) / DRAWER (mobile) -->
-    <aside id="files-sidebar" class="hidden">
-      <div class="sidebar-header">
-        <span>📁 Archivos</span>
-        <button id="sidebar-close" class="icon-btn">✕</button>
+    <!-- SIDEBAR -->
+    <aside id="files-sidebar">
+      <!-- Desktop brand -->
+      <div class="sidebar-brand">
+        <span class="brand-name">NovaClaw</span>
+        <span id="status-dot-desktop" class="status-dot offline"></span>
+        <button id="sidebar-collapse-btn" class="sidebar-icon-btn" title="Colapsar panel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
       </div>
+      <!-- Drag handle para redimensionar -->
+      <div id="sidebar-resize-handle"></div>
+
+      <!-- Sidebar top actions (desktop) -->
+      <div class="sidebar-search-row">
+        <button id="search-btn-desktop" class="sidebar-action-btn" title="Buscar (⌘K)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <span>Buscar</span>
+        </button>
+      </div>
+
+      <!-- Folder tabs -->
+      <div class="sidebar-section-label">Archivos</div>
       <div class="folder-tabs">
-        <button class="folder-tab active" data-dir="">🏠 Todo</button>
-        <button class="folder-tab" data-dir="inbox">📥 inbox</button>
-        <button class="folder-tab" data-dir="activo">⚡ activo</button>
-        <button class="folder-tab" data-dir="archivo">🗄️ archivo</button>
+        <button class="folder-tab active" data-dir="">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+          Todo
+        </button>
+        <button class="folder-tab" data-dir="inbox">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+          inbox
+        </button>
+        <button class="folder-tab" data-dir="activo">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          activo
+        </button>
+        <button class="folder-tab" data-dir="archivo">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+          archivo
+        </button>
       </div>
+
+      <!-- Files list -->
       <div id="files-list" class="files-list">
         <div class="loading-msg">Cargando archivos...</div>
+      </div>
+
+      <!-- Sidebar footer -->
+      <div class="sidebar-footer">
+        <button id="theme-btn" class="sidebar-icon-btn" title="Cambiar tema">
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        </button>
+        <button id="settings-btn" class="sidebar-icon-btn" title="Ajustes">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button id="sidebar-close" class="sidebar-icon-btn" title="Cerrar panel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
     </aside>
 
     <!-- CHAT AREA -->
     <main id="chat-main">
-      <div id="chat" role="log" aria-live="polite"></div>
-
-      <!-- TYPING INDICATOR -->
-      <div id="typing-indicator" class="typing-indicator hidden">
-        <img src="/icons/mascot.png" alt="" class="mascot-typing" id="mascot-thinking" onerror="this.style.display='none'">
-        <span id="typing-text">Claude está pensando...</span>
+      <button id="sidebar-expand-btn" class="sidebar-expand-btn hidden" title="Abrir panel">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <div id="chat">
+        <!-- EMPTY STATE -->
+        <div id="empty-state" class="empty-state">
+          <img src="/icons/icon-192.png" class="empty-mascot" alt="NovaClaw">
+          <h2 class="empty-title">¿En qué te ayudo?</h2>
+          <p class="empty-sub">Escribe un mensaje o envía un archivo</p>
+        </div>
+        <!-- TYPING INDICATOR (inside chat to avoid layout shifts) -->
+        <div id="typing-indicator" class="typing-indicator hidden">
+          <img src="/icons/icon-192.png" class="typing-mascot" alt="NovaClaw pensando">
+          <div class="typing-dots">
+            <span></span><span></span><span></span>
+          </div>
+          <span class="typing-label">estoy pensando</span>
+        </div>
       </div>
 
       <!-- INPUT BAR -->
       <div id="input-bar">
-        <button id="attach-btn" class="icon-btn" title="Adjuntar archivo">📎</button>
-        <input type="file" id="file-input" style="display:none" multiple>
-        <div class="input-wrap">
-          <textarea id="message-input" placeholder="Escribe o dicta un mensaje..." rows="1" autocomplete="off"></textarea>
-          <div id="slash-popup" class="slash-popup hidden"></div>
+        <div class="input-pill">
+          <button id="attach-btn" class="pill-icon-btn" title="Adjuntar archivo">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <input type="file" id="file-input" style="display:none" multiple>
+          <div class="input-wrap">
+            <textarea id="message-input" placeholder="Escribe o dicta un mensaje..." rows="1" autocomplete="off"></textarea>
+            <div id="slash-popup" class="slash-popup hidden"></div>
+          </div>
+          <button id="mic-btn" class="pill-icon-btn" title="Nota de voz">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+          </button>
+          <button id="send-btn" class="send-btn" title="Enviar (⌘Enter)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+          </button>
         </div>
-        <button id="mic-btn" class="icon-btn" title="Nota de voz">🎤</button>
-        <button id="send-btn" class="send-btn" title="Enviar (Ctrl+Enter)">➤</button>
       </div>
     </main>
-  </div>
-</div>
+
+  </div><!-- /#layout -->
+
+  <!-- MOBILE BOTTOM TABS -->
+  <nav id="mobile-tabs">
+    <button class="mobile-tab active" data-panel="chat">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span>Chat</span>
+    </button>
+    <button class="mobile-tab" data-panel="files">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+      <span>Archivos</span>
+    </button>
+  </nav>
+
+</div><!-- /#app -->
 
 <!-- FILE PREVIEW MODAL -->
 <div id="preview-modal" class="modal hidden">
@@ -107,9 +205,15 @@
     <div class="modal-header">
       <span id="preview-title"></span>
       <div class="modal-actions">
-        <button id="preview-download" class="icon-btn" title="Descargar">⬇️</button>
-        <button id="preview-share" class="icon-btn" title="Compartir">🔗</button>
-        <button id="preview-close" class="icon-btn">✕</button>
+        <button id="preview-download" class="icon-btn" title="Descargar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+        </button>
+        <button id="preview-share" class="icon-btn" title="Compartir">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button id="preview-close" class="icon-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
     </div>
     <div id="preview-body" class="modal-body"></div>
@@ -121,8 +225,10 @@
   <div class="modal-backdrop" id="settings-backdrop"></div>
   <div class="modal-content settings-content">
     <div class="modal-header">
-      <span>⚙️ Ajustes</span>
-      <button id="settings-close" class="icon-btn">✕</button>
+      <span>Ajustes</span>
+      <button id="settings-close" class="icon-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
     <div class="settings-body">
       <div class="setting-row">
@@ -138,10 +244,10 @@
         <code id="queue-status-display">—</code>
       </div>
       <div class="setting-row">
-        <a href="#" id="export-chat-btn">⬇️ Exportar chat como Markdown</a>
+        <a href="#" id="export-chat-btn">Exportar chat como Markdown</a>
       </div>
       <div class="setting-row">
-        <a href="#" id="starred-btn">⭐ Mensajes guardados</a>
+        <a href="#" id="starred-btn">Mensajes guardados</a>
       </div>
     </div>
   </div>
@@ -155,6 +261,6 @@
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 <script>Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';</script>
-<script src="/app.js"></script>
+<script src="/app.js?v=6"></script>
 </body>
 </html>

@@ -52,14 +52,19 @@ loadEnv();
 // ============================================================
 // MÓDULOS V3
 // ============================================================
-const db      = require('./lib/db');
+const db      = require('./lib/pgdb');   // PostgreSQL compartido con Nova
 const session = require('./lib/session');
 const queue   = require('./lib/queue');
 const auth    = require('./lib/auth');
 const ws      = require('./lib/ws');
 const files   = require('./lib/files');
 
-db.init();
+// Init async — PostgreSQL necesita conectarse antes de servir
+let pgReady = false;
+const pgInitPromise = db.init().then(() => { pgReady = true; }).catch(e => {
+  console.error('[bridge] PostgreSQL init falló:', e.message);
+  console.warn('[bridge] Continuando sin DB — mensajes no se guardarán');
+});
 
 // ============================================================
 // SINGLE INSTANCE LOCK
@@ -202,7 +207,7 @@ function _spawnClaude(args, chatId, channel, messageUuid) {
     proc.stderr.on('data', d => {
       const txt = d.toString();
       stderr += txt;
-      if (/session.not.found|No session|invalid.session|Session.*not.*found/i.test(txt)) {
+      if (/session.not.found|No session|invalid.session|Session.*not.*found|No conversation found/i.test(txt)) {
         sessionNotFound = true;
       }
     });
@@ -248,15 +253,22 @@ function buildClaudeArgs(message, uuid) {
     '--dangerously-skip-permissions',
   ];
 
+  // Solo usar --resume si el archivo de sesión existe localmente.
+  // MiniMax devuelve session_ids que no crean archivos en ~/.claude/ — usar --continue en ese caso.
   if (uuid) {
-    return ['--resume', uuid, ...base, message];
+    const sessionFile = path.join(os.homedir(), '.claude', 'projects',
+      '-Users-papa-0Proyectos-MyClaw', `${uuid}.jsonl`);
+    if (fs.existsSync(sessionFile)) {
+      return ['--resume', uuid, ...base, message];
+    }
+    console.warn(`[session] UUID ${uuid} no tiene archivo local, usando --continue`);
   }
   return [...base, '--continue', message];
 }
 
 // askClaude con retry automático si session_not_found
 async function askClaude(message, chatId, channel, messageUuid) {
-  const uuid = session.loadSession();
+  const uuid = await session.loadSession();
 
   try {
     const { result } = await _spawnClaude(buildClaudeArgs(message, uuid), chatId, channel, messageUuid);
@@ -264,7 +276,7 @@ async function askClaude(message, chatId, channel, messageUuid) {
   } catch (err) {
     if (err.code === 'session_not_found' && uuid) {
       console.warn('[bridge] session no encontrada, limpiando y reintentando sin --resume');
-      session.clearSession();
+      await session.clearSession();
       const { result } = await _spawnClaude(
         buildClaudeArgs(message, null),
         chatId, channel, messageUuid
@@ -278,7 +290,8 @@ async function askClaude(message, chatId, channel, messageUuid) {
 // ============================================================
 // CLAUDE CON IMAGEN (vision via --input-format stream-json)
 // ============================================================
-function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
+async function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
+  const uuid = await session.loadSession();
   return new Promise((resolve, reject) => {
     const input = JSON.stringify({
       messages: [{
@@ -290,7 +303,6 @@ function askClaudeWithImage(base64Data, mimeType, caption, chatId) {
       }],
     });
 
-    const uuid = session.loadSession();
     const args = [
       '--print',
       ...(uuid ? ['--resume', uuid] : ['--continue']),
@@ -459,43 +471,28 @@ async function route(message, chatId, channel = 'telegram') {
     }
   }
 
-  // Guardar mensaje del usuario en SQLite + broadcast WS
+  // Guardar mensaje del usuario en PostgreSQL + broadcast WS
   const userUuid = crypto.randomUUID();
   const now = Date.now();
-  try {
-    db.insertMessage({
-      uuid: userUuid,
-      channel,
-      role: 'user',
-      content: text,
-      chat_id: chatId ? String(chatId) : null,
-      session_uuid: session.loadSession(),
-      file_path: null,
-    });
-  } catch (e) {
-    console.error('[db] insertMessage user error:', e.message);
-  }
+  const currentSession = await session.loadSession(chatId ? String(chatId) : '');
+  db.insertMessage({
+    uuid: userUuid, channel, role: 'user', content: text,
+    chat_id: chatId ? String(chatId) : null,
+    session_uuid: currentSession, file_path: null,
+  }).catch(e => console.error('[db] insertMessage user error:', e.message));
   ws.broadcast({ type: 'message', role: 'user', content: text, uuid: userUuid, channel, created_at: now });
 
   // Encolar llamada a Claude (pasando uuid para correlacionar thinking events)
   const assistantUuid = crypto.randomUUID();
   const result = await queue.push(() => askClaude(text, chatId, channel, assistantUuid));
 
-  // Guardar respuesta del asistente en SQLite + broadcast WS
+  // Guardar respuesta del asistente en PostgreSQL + broadcast WS
   const assistantNow = Date.now();
-  try {
-    db.insertMessage({
-      uuid: assistantUuid,
-      channel,
-      role: 'assistant',
-      content: result,
-      chat_id: chatId ? String(chatId) : null,
-      session_uuid: session.loadSession(),
-      file_path: null,
-    });
-  } catch (e) {
-    console.error('[db] insertMessage assistant error:', e.message);
-  }
+  db.insertMessage({
+    uuid: assistantUuid, channel, role: 'assistant', content: result,
+    chat_id: chatId ? String(chatId) : null,
+    session_uuid: currentSession, file_path: null,
+  }).catch(e => console.error('[db] insertMessage assistant error:', e.message));
   ws.broadcast({ type: 'message', role: 'assistant', content: result, uuid: assistantUuid, channel, created_at: assistantNow });
 
   return result;
@@ -549,7 +546,7 @@ const server = http.createServer(async (req, res) => {
       uptime: process.uptime(),
       provider: MINIMAX_URL,
       queue: queue.status(),
-      session: session.loadSession(),
+      session: await session.loadSession().catch(() => null),
     });
   }
 
@@ -568,7 +565,7 @@ const server = http.createServer(async (req, res) => {
       const before  = params.get('before') ? parseInt(params.get('before'), 10) : null;
       const q       = params.get('q') || null;
       const starred = params.get('starred') === '1';
-      const messages = db.getHistory({ limit, before, q, starred });
+      const messages = await db.getHistory({ limit, before, q, starred });
       return jsonRes(res, 200, messages);
     } catch (e) {
       return jsonRes(res, 500, { error: e.message });
@@ -635,17 +632,12 @@ const server = http.createServer(async (req, res) => {
       } else if (IMAGE_MIMES.has(mime_type)) {
         const base64Data = buffer.toString('base64');
         const fileUuid = crypto.randomUUID();
-        try {
-          db.insertMessage({
-            uuid: fileUuid,
-            channel: 'telegram',
-            role: 'user',
-            content: caption || '[imagen]',
-            chat_id: chat_id ? String(chat_id) : null,
-            session_uuid: session.loadSession(),
-            file_path: savedPath,
-          });
-        } catch {}
+        db.insertMessage({
+          uuid: fileUuid, channel: 'telegram', role: 'user',
+          content: caption || '[imagen]',
+          chat_id: chat_id ? String(chat_id) : null,
+          session_uuid: null, file_path: savedPath,
+        }).catch(() => {});
         try {
           result = await queue.push(() => askClaudeWithImage(base64Data, mime_type, caption, chat_id));
         } catch (e) {
@@ -653,17 +645,11 @@ const server = http.createServer(async (req, res) => {
           throw e;
         }
         const assistantUuid = crypto.randomUUID();
-        try {
-          db.insertMessage({
-            uuid: assistantUuid,
-            channel: 'telegram',
-            role: 'assistant',
-            content: result,
-            chat_id: chat_id ? String(chat_id) : null,
-            session_uuid: session.loadSession(),
-            file_path: null,
-          });
-        } catch {}
+        db.insertMessage({
+          uuid: assistantUuid, channel: 'telegram', role: 'assistant',
+          content: result, chat_id: chat_id ? String(chat_id) : null,
+          session_uuid: null, file_path: null,
+        }).catch(() => {});
       } else {
         msg = caption
           ? `${caption}\n\n[Archivo guardado en: ${savedPath}]`
@@ -720,14 +706,11 @@ const server = http.createServer(async (req, res) => {
       const msgUuid = crypto.randomUUID();
       const now = Date.now();
       db.insertMessage({
-        uuid: msgUuid,
-        channel: 'desktop',
+        uuid: msgUuid, channel: 'desktop',
         role: role === 'user' ? 'user' : 'assistant',
-        content: String(content),
-        chat_id: null,
-        session_uuid: session.loadSession(),
-        file_path: null,
-      });
+        content: String(content), chat_id: null,
+        session_uuid: null, file_path: null,
+      }).catch(() => {});
       ws.broadcast({ type: 'message', role: role || 'assistant', content: String(content), uuid: msgUuid, channel: 'desktop', created_at: now });
       return jsonRes(res, 200, { ok: true, uuid: msgUuid });
     } catch (e) {
@@ -742,8 +725,71 @@ const server = http.createServer(async (req, res) => {
       const msgUuid = req.url.split('/')[3];
       const body = await readBody(req);
       const { starred } = JSON.parse(body.toString());
-      db.starMessage(msgUuid, !!starred);
+      await db.starMessage(msgUuid, !!starred);
       return jsonRes(res, 200, { ok: true });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // ── NOVA SHARED DATA ───────────────────────────────────────
+
+  // POST /api/nova/note  { title, content, note_type? }
+  if (req.method === 'POST' && req.url === '/api/nova/note') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const body = await readBody(req);
+      const { title, content, note_type } = JSON.parse(body.toString());
+      if (!content) return jsonRes(res, 400, { error: 'content required' });
+      const userId = auth.getSessionUser(req);
+      const note = await db.createNote({ user_id: userId || null, title, content, note_type });
+      ws.broadcast({ type: 'nova_note', note });
+      return jsonRes(res, 201, { ok: true, note });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // GET /api/nova/notes?limit=20
+  if (req.method === 'GET' && req.url.startsWith('/api/nova/notes')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const userId = auth.getSessionUser(req);
+      const url = new URL(req.url, 'http://x');
+      const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+      const notes = await db.getNotes({ user_id: userId || null, limit });
+      return jsonRes(res, 200, notes);
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // POST /api/nova/action  { title, content, action_type?, due_at? }
+  if (req.method === 'POST' && req.url === '/api/nova/action') {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const body = await readBody(req);
+      const { title, content, action_type, due_at } = JSON.parse(body.toString());
+      if (!title) return jsonRes(res, 400, { error: 'title required' });
+      const userId = auth.getSessionUser(req);
+      const action = await db.createAction({ user_id: userId || null, title, content, action_type, due_at });
+      ws.broadcast({ type: 'nova_action', action });
+      return jsonRes(res, 201, { ok: true, action });
+    } catch (e) {
+      return jsonRes(res, 500, { error: e.message });
+    }
+  }
+
+  // GET /api/nova/actions?status=active&limit=20
+  if (req.method === 'GET' && req.url.startsWith('/api/nova/actions')) {
+    if (!auth.verifyToken(req)) return jsonRes(res, 401, { error: 'unauthorized' });
+    try {
+      const userId = auth.getSessionUser(req);
+      const url = new URL(req.url, 'http://x');
+      const status = url.searchParams.get('status') || null;
+      const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+      const actions = await db.getActions({ user_id: userId || null, status, limit });
+      return jsonRes(res, 200, actions);
     } catch (e) {
       return jsonRes(res, 500, { error: e.message });
     }
@@ -981,7 +1027,7 @@ const server = http.createServer(async (req, res) => {
       const content = fs.readFileSync(fullStatic);
       res.writeHead(200, {
         'Content-Type': mime,
-        'Cache-Control': staticPath === '/sw.js' ? 'no-cache' : 'public, max-age=3600',
+        'Cache-Control': 'no-cache',
       });
       res.end(content);
       return;
@@ -1004,8 +1050,9 @@ const server = http.createServer(async (req, res) => {
 // Iniciar WebSocket server
 ws.init(server);
 
-server.listen(API_PORT, '0.0.0.0', () => {
-  const uuid = session.loadSession();
+server.listen(API_PORT, '0.0.0.0', async () => {
+  await pgInitPromise;
+  const uuid = await session.loadSession().catch(() => null);
   console.log('🚀 ClaudeClaw Bridge v3 iniciado');
   console.log(`   API:      http://0.0.0.0:${API_PORT}`);
   console.log(`   Provider: ${MINIMAX_URL}`);
@@ -1013,5 +1060,5 @@ server.listen(API_PORT, '0.0.0.0', () => {
   console.log(`   Session:  ${uuid || '(nueva)'}`);
   console.log(`   Timeout:  ${TIMEOUT_MS / 1000}s`);
   console.log(`   WS:       ws://0.0.0.0:${API_PORT}/ws`);
-  console.log('   Modo: stream-json + cola serializada + SQLite + WebSocket');
+  console.log('   Modo: stream-json + cola serializada + PostgreSQL + WebSocket');
 });
