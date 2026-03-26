@@ -553,7 +553,7 @@ const CMD = {
 // ============================================================
 // ROUTER: texto → comando local o Claude (via cola del workspace)
 // ============================================================
-async function route(message, chatId, channel = 'telegram', workspaceId = 'myclaw') {
+async function route(message, chatId, channel = 'telegram', workspaceId = 'myclaw', userId = null) {
   const text = (message || '').trim();
   if (!text) return '(mensaje vacío)';
 
@@ -582,7 +582,7 @@ async function route(message, chatId, channel = 'telegram', workspaceId = 'mycla
       uuid: userUuid, channel, role: 'user', content: text,
       chat_id: chatId ? String(chatId) : null,
       session_uuid: currentSession, file_path: null,
-      workspace_id: wsId,
+      workspace_id: wsId, user_id: userId,
     });
   } catch (e) {
     console.error('[db] insertMessage user error:', e.message, { wsId, uuid: userUuid });
@@ -600,7 +600,7 @@ async function route(message, chatId, channel = 'telegram', workspaceId = 'mycla
       uuid: assistantUuid, channel, role: 'assistant', content: result,
       chat_id: chatId ? String(chatId) : null,
       session_uuid: currentSession, file_path: null,
-      workspace_id: wsId,
+      workspace_id: wsId, user_id: userId,
     });
   } catch (e) {
     console.error('[db] insertMessage assistant error:', e.message, { wsId, uuid: assistantUuid });
@@ -867,10 +867,11 @@ const server = http.createServer(async (req, res) => {
       const { message, chat_id, workspace_id } = JSON.parse(body.toString());
       if (!message) return jsonRes(res, 400, { error: 'message required' });
       const wsId = workspace_id || 'myclaw';
-      console.log(`[api/chat] ws=${wsId} msg=${String(message).slice(0, 80)}`);
+      const sessionUser = auth.getSessionUser(req) || null;
+      console.log(`[api/chat] ws=${wsId} user=${sessionUser} msg=${String(message).slice(0, 80)}`);
       let result;
       try {
-        result = await route(message, chat_id || null, 'pwa', wsId);
+        result = await route(message, chat_id || null, 'pwa', wsId, sessionUser);
       } catch (e) {
         if (e.code === 'queue_full') return jsonRes(res, 503, { error: 'queue_full', queue: workspaces.get(wsId).queue.status() });
         throw e;
